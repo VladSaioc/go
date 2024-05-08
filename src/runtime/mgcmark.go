@@ -50,7 +50,127 @@ const (
 	// Must be a multiple of the pageInUse bitmap element size and
 	// must also evenly divide pagesPerArena.
 	pagesPerSpanRoot = 512
+
+	// ANGE XXX
+	GC_SKIP_MASK      = uintptr(0x7000000000000000)
+	GC_UNDO_SKIP_MASK = ^GC_SKIP_MASK // this flips every bit in GC_SKIP_MASK of uinptr width
 )
+
+// Stack returns a formatted stack trace of the goroutine that calls it.
+// It calls runtime.Stack with a large enough buffer to capture the entire trace.
+func getStack() []byte {
+	buf := make([]byte, 1024)
+	for {
+		n := Stack(buf, false)
+		if n < len(buf) {
+			return buf[:n]
+		}
+		buf = make([]byte, 2*len(buf))
+	}
+}
+
+func gc_ptr_is_masked(p unsafe.Pointer) bool {
+	return (uintptr(p) & GC_SKIP_MASK) == GC_SKIP_MASK
+}
+
+func gc_mask_ptr(p unsafe.Pointer) unsafe.Pointer {
+	if debug.gcdetectdeadlocks != 0 {
+		return unsafe.Pointer(uintptr(p) | GC_SKIP_MASK)
+	}
+	return p
+}
+
+func gc_undo_mask_ptr(p unsafe.Pointer) unsafe.Pointer {
+	return unsafe.Pointer(uintptr(p) & GC_UNDO_SKIP_MASK)
+}
+
+// ANGE XXX: added helper
+// return true if the reason is a non-blocking waitReason
+// (i.e., the runtime will eventually reschedule this goroutine
+// even though the goroutine is currently parked)
+func unblockingWaitReason(reason waitReason) bool {
+	return reason != waitReasonChanReceive &&
+		reason != waitReasonSyncWaitGroupWait &&
+		reason != waitReasonChanSend &&
+		reason != waitReasonChanReceiveNilChan &&
+		reason != waitReasonChanSendNilChan &&
+		reason != waitReasonSelect &&
+		reason != waitReasonSelectNoCases &&
+		reason != waitReasonSyncMutexLock &&
+		reason != waitReasonSyncRWMutexRLock &&
+		reason != waitReasonSyncRWMutexLock &&
+		reason != waitReasonSyncCondWait
+}
+
+// ANGE XXX: newly added for deadlock detection
+// The world must be stopped or allglock must be held.
+// go through the snapshot of allgs, putting them into an arrays,
+// separated by index, where [0:blockedIndex] contains only running Gs
+// allGs[blockedIndex:] contain only blocking Gs
+// To avoid GC from marking and scanning the blocked Gs by scanning
+// the returned array (which is heap allocated), we mask the highest
+// bit of the pointers to Gs with GC_SKIP_MASK
+func allGsSnapshotSortedForGC() ([]unsafe.Pointer, int) {
+	assertWorldStoppedOrLockHeld(&allglock)
+
+	allgsSorted := make([]unsafe.Pointer, len(allgs))
+
+	var currIndex = 0                       // next index for where a non-waiting g should go
+	var blockedIndex = len(allgsSorted) - 1 // next index for where a waiting g should go
+	if gcddtrace(1) || gcddtrace(2) {
+		println("\t~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n" +
+			"\t[[[ Performing all Gs snapshot ]]]\n" +
+			"\t===================================")
+	}
+	for i, p := range allgs {
+		var gp *g = (*g)(gc_undo_mask_ptr(p))
+		if report := userGoroutineReport(gp); /* report != "INTERNAL GOROUTINE" && */ gcddtrace(1) || gcddtrace(2) {
+			println("\t\t[", i, "]: ", report)
+		}
+	}
+	for i, p := range allgs {
+		var gp *g = (*g)(gc_undo_mask_ptr(p))
+		// not sure if we need atomic load because we are stopping the world,
+		// but do it just to be safe for now
+		var status uint32 = readgstatus(gp)
+		if status == _Gunreachable {
+			// shouldn't encounter Gunreachable at this point, unless
+			// we have overlap GCs, which shouldn't happen since we only
+			// perform deadlock detection with STW GC
+			println("Unreachable goroutine:", i, "\n"+
+				fullGoroutineReport(gp))
+			throw("Found unreachable goroutines in allgs snapshot!")
+		}
+		if status != _Gwaiting || unblockingWaitReason(gp.waitreason) {
+			if gcddtrace(1) {
+				println("\t\t[[[ Goroutine", i, "not waiting:", status, "]]]")
+			}
+			allgsSorted[currIndex] = unsafe.Pointer(gp)
+			currIndex++
+		} else {
+			if gcddtrace(1) {
+				println("\t\t[[[ Goroutine", i, "waiting:", status, "]]]")
+			}
+			allgsSorted[blockedIndex] = gc_mask_ptr(unsafe.Pointer(gp))
+			blockedIndex--
+		}
+	}
+	if gcddtrace(1) || gcddtrace(2) {
+		println("\t=============================\n" +
+			"\t[[[ Done all Gs snapshot ]]]\n" +
+			"\t~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
+	}
+	if currIndex != (blockedIndex + 1) {
+		panic("currIndex and blockedIndex don't match up")
+	}
+
+	// Because the world is stopped or allglock is held, allgadd
+	// cannot happen concurrently with this. allgs grows
+	// monotonically and existing entries never change, so we can
+	// simply return a copy of the slice header. For added safety,
+	// we trim everything past len because that can still change.
+	return allgsSorted, blockedIndex + 1
+}
 
 // gcMarkRootPrepare queues root scanning jobs (stacks, globals, and
 // some miscellany) and initializes scanning-related state.
@@ -58,6 +178,11 @@ const (
 // The world must be stopped.
 func gcMarkRootPrepare() {
 	assertWorldStopped()
+	if gcddtrace(1) || gcddtrace(2) {
+		println("≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠\n"+
+			"[[[[[[[[[[[[[[[[ GC:", work.cycles.Load(), ":: II. INITIAL MARKING PHASE ]]]]]]]]]]]]]]]]\n"+
+			"≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠")
+	}
 
 	// Compute how many data and BSS root blocks there are.
 	nBlocks := func(bytes uintptr) int {
@@ -101,11 +226,41 @@ func gcMarkRootPrepare() {
 	// ignore them because they begin life without any roots, so
 	// there's nothing to scan, and any roots they create during
 	// the concurrent phase will be caught by the write barrier.
-	work.stackRoots = allGsSnapshot()
+	// ANGE XXX: FIXME --- add a new flag later
+	// ANGE XXX:  instead of getting allGs,  just get all Gs that are running
+	// work.stackRoots = allGsSnapshot()
+	var allgsSorted []unsafe.Pointer
+	var blockedIndex int
+	if debug.gcdetectdeadlocks == 0 {
+		// regular GC --- scan every go routine
+		allgsSorted = allGsSnapshot()
+		blockedIndex = len(allgsSorted)
+	} else {
+		allgsSorted, blockedIndex = allGsSnapshotSortedForGC()
+		if gcddtrace(1) {
+			for i, p := range allgsSorted {
+				nomask := gc_undo_mask_ptr(p)
+				var gp *g = (*g)(nomask)
+				println("\t\tallgsSorted[", i, "] = ", nomask, "status", gStatusStrings[gp.atomicstatus.Load()], "name:",
+					getGoroutineName(gp), "wait:", gp.waitreason.String())
+				// printIfMarked(unsafe.Pointer(gp))
+			}
+		}
+	}
+	work.stackRoots = allgsSorted
 	work.nStackRoots = len(work.stackRoots)
+	work.nValidStackRoots = blockedIndex
 
 	work.markrootNext = 0
-	work.markrootJobs = uint32(fixedRootCount + work.nDataRoots + work.nBSSRoots + work.nSpanRoots + work.nStackRoots)
+	work.markrootJobs = uint32(fixedRootCount + work.nDataRoots + work.nBSSRoots + work.nSpanRoots + work.nValidStackRoots)
+	if gcddtrace(2) {
+		println("\t======================================\n"+
+			"\t[[[[[[[[[ UPDATED ROOT JOBS ]]]]]]]]]\n"+
+			"\t[ work.markrootJobs", work.markrootJobs, "] [ fixedRootCount", fixedRootCount, "]\n"+
+			"\t[ work.nDataRoots :", work.nDataRoots, "] [ work.nBSSRoots", work.nBSSRoots, "] [ work.nSpanRoots", work.nSpanRoots, "]\n"+
+			"\t[ work.nValidStackRoots :", work.nValidStackRoots, "]\n"+
+			"\t~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
+	}
 
 	// Calculate base indexes of each root type
 	work.baseData = uint32(fixedRootCount)
@@ -118,8 +273,10 @@ func gcMarkRootPrepare() {
 // gcMarkRootCheck checks that all roots have been scanned. It is
 // purely for debugging.
 func gcMarkRootCheck() {
-	if work.markrootNext < work.markrootJobs {
-		print(work.markrootNext, " of ", work.markrootJobs, " markroot jobs done\n")
+	rootNext := atomic.Load(&work.markrootNext)
+	rootJobs := atomic.Load(&work.markrootJobs)
+	if rootNext < rootJobs {
+		print(rootNext, " of ", rootJobs, " markroot jobs done\n")
 		throw("left over markroot jobs")
 	}
 
@@ -137,7 +294,9 @@ func gcMarkRootCheck() {
 		if !gp.gcscandone {
 			println("gp", gp, "goid", gp.goid,
 				"status", readgstatus(gp),
-				"gcscandone", gp.gcscandone)
+				"gcscandone", gp.gcscandone,
+				"gname",
+			)
 			throw("scan missed a g")
 		}
 
@@ -147,6 +306,245 @@ func gcMarkRootCheck() {
 
 // ptrmask for an allocation containing a single pointer.
 var oneptrmask = [...]uint8{1}
+
+// Dequeue the deadlocked goroutine from the semaphore treap.
+func gc_sema_dequeue(gp *g, addr *uint32) *sudog {
+	// Get semaphore root from the semtable.
+	var root *semaRoot = semtable.rootFor(addr)
+	lockWithRank(&root.lock, lockRankRoot)
+
+	// Get the sudog's parent in the treap.
+	ps := &root.treap
+	s := *ps
+	// Can be assumed that the sema address is masked, because only
+	// a goroutine blocked on a masked sema can be flagged as deadlocked
+	// and reclaimed by the run-time.
+	var masked_addr unsafe.Pointer = gc_mask_ptr(unsafe.Pointer(addr))
+	// Cycle through the treap to find the right sudog.
+	for ; s != nil; s = *ps {
+		if s.elem == masked_addr {
+			goto Found
+		}
+		if uintptr(masked_addr) < uintptr(s.elem) {
+			ps = &s.prev
+		} else {
+			ps = &s.next
+		}
+	}
+	// we can only fall through to this point if addr not found
+	throw("Sema addr not found in the semTable!")
+
+Found:
+	// ANGE XXX Notes on the semTable treap structure
+	// a sudog's parent / prev / next maintains the binary tree structure
+	// for the treap, and the weitlink forms the linked list of sudogs
+	// waiting on the same addr; the ticket field is used to maintain the
+	// balanced tree property
+	// In the linked list, only the sudog at the head of the list is
+	// in the treap (i.e., maintains non-nil parent / prev / next)
+	target := s
+	if t := s.waitlink; t != nil {
+		var targetPred *sudog = nil
+		// Cycle through the linked list to find the right sudog.
+		for ; target != nil && target.g != gp; target, targetPred = target.waitlink, target {
+		}
+
+		if target == nil {
+			throw("The unreachable goroutine not found in the semTable!")
+		}
+		if target.g != gp {
+			println("Wanted:", unsafe.Pointer(gp), "Got:", unsafe.Pointer(target.g))
+			throw("Targetted wrong sudog node.")
+		}
+
+		if target == s {
+			// we are actually removing s
+			// Substitute t, also waiting on addr, for s in root tree of unique addrs.
+			*ps = t
+			t.ticket = s.ticket
+			t.parent = s.parent
+			t.prev = s.prev
+			if t.prev != nil {
+				t.prev.parent = t
+			}
+			t.next = s.next
+			if t.next != nil {
+				t.next.parent = t
+			}
+			if t.waitlink != nil {
+				t.waittail = s.waittail
+			} else {
+				t.waittail = nil
+			}
+		} else {
+			// unlinking target that is not s
+			targetPred.waitlink = target.waitlink
+			if targetPred.waitlink == nil {
+				s.waittail = targetPred
+			}
+		}
+		target.waitlink = nil
+		target.waittail = nil
+	} else {
+		if target.g != gp {
+			throw("Unreachable g not found in the semTable")
+		}
+		// Rotate s down to be leaf of tree for removal, respecting priorities.
+		for target.next != nil || target.prev != nil {
+			if target.next == nil || target.prev != nil && target.prev.ticket < target.next.ticket {
+				root.rotateRight(target)
+			} else {
+				root.rotateLeft(target)
+			}
+		}
+		// Remove target, now a leaf.
+		if target.parent != nil {
+			if target.parent.prev == target {
+				target.parent.prev = nil
+			} else {
+				target.parent.next = nil
+			}
+		} else {
+			root.treap = nil
+		}
+	}
+	target.parent = nil
+	target.elem = nil
+	target.next = nil
+	target.prev = nil
+	target.ticket = 0
+
+	root.nwait.Add(-1)
+	unlock(&root.lock)
+
+	return target
+}
+
+// similar to goexit0 in panic.go, except that we invoke this on the
+// unreachable goroutines found during GC deadlock detection, and the
+// goroutine running it is not g0 but the gcBgMarkWorker
+func gc_goexit0(gp *g) {
+	_g_ := getg()
+	_p_ := _g_.m.p.ptr()
+
+	if readgstatus(gp) != _Gunreachable {
+		throw("Unreachable goroutine changed status!")
+	}
+	casgstatus(gp, _Gunreachable, _Gdead)
+	gcController.addScannableStack(_p_, -int64(gp.stack.hi-gp.stack.lo))
+	if isSystemGoroutine(gp, false) {
+		sched.ngsys.Add(-1)
+	}
+	if gp.m != nil {
+		throw("Unrechable goroutine has a non-nil m!")
+	}
+	gp.m = nil
+	locked := gp.lockedm != 0
+	if locked {
+		throw("Unreachable goroutine has locked a thread!")
+	}
+	if _g_.m.lockedg != 0 {
+		throw("Not sure what to do here!")
+	}
+	gp.lockedm = 0
+	gp.preemptStop = false
+	gp.paniconfault = false
+	gp._defer = nil // should be true already but just in case.
+	gp._panic = nil // non-nil for Goexit during panic. points at stack-allocated data.
+	gp.writebuf = nil
+
+	// Dequeue deadlocked goroutine from semaphore
+	if gp.waiting_sema != nil {
+		var addr *uint32 = (*uint32)(gc_undo_mask_ptr(gp.waiting_sema))
+		var s *sudog = gc_sema_dequeue(gp, addr)
+		if s.g != gp {
+			throw("Targetted wrong sudog!")
+		}
+		s.g = nil
+		releaseSudog(s) // return sudog to the cache
+	}
+
+	// Remove deadlocked goroutines from the notifier.
+	if gp.waiting_notifier != nil {
+		notifier := (*notifyList)(gc_undo_mask_ptr(gp.waiting_notifier))
+		var s *sudog = gc_notifyListNotifyOne(notifier, gp)
+		if s == nil || s.g != gp {
+			throw("Targetted wrong sudog!")
+		}
+		s.g = nil
+		releaseSudog(s) // return sudog to the cache
+	}
+	gp.waiting_sema = nil
+	gp.waiting_notifier = nil
+	gp.param = nil
+	gp.labels = nil
+	gp.timer = nil
+
+	// Clear all elem before unlinking from gp.waiting.
+	for sg := gp.waiting; sg != nil; sg = sg.waitlink {
+		// ANGE XXX: some sanity check
+		/* This sanity check is no longer correct now that we also included
+			the unreachable goroutine to be marked before leaving the mark
+			phase.  We need to mark the unreachable goroutines before leaving
+			the mark phase because the goroutine structs are reused, so they
+			need to be marked as well.
+			We could have done part of the gc
+		if sg.c != nil {
+			if checkIfMarked(unsafe.Pointer(sg.c)) {
+				println("XXXX At gc_goexit, sudog of gp ", gp, " has a marked channel", sg.c)
+				// throw("An unreachable goroutine has a pointer to a reachable channel!")
+			}
+		}
+		*/
+		sg.isSelect = false
+		sg.elem = nil
+		sg.c = nil
+	}
+	gp.waiting = nil
+	gp.waitreason = 0
+
+	if gcBlackenEnabled != 0 && gp.gcAssistBytes > 0 {
+		// Flush assist credit to the global pool. This gives
+		// better information to pacing if the application is
+		// rapidly creating an exiting goroutines.
+		assistWorkPerByte := gcController.assistWorkPerByte.Load()
+		scanCredit := int64(assistWorkPerByte * float64(gp.gcAssistBytes))
+		gcController.bgScanCredit.Add(scanCredit)
+		gp.gcAssistBytes = 0
+	}
+
+	if GOARCH == "wasm" { // no threads yet on wasm
+		gfput(_p_, gp)
+	}
+
+	if _g_.m.lockedInt != 0 {
+		print("invalid m->lockedInt = ", _g_.m.lockedInt, "\n")
+		throw("internal lockOSThread error")
+	}
+	gfput(_p_, gp)
+}
+
+// ANGE XXX: added function
+// This is very similar to the cleanup process in Goexit in panic.go but invoked on an unreachable g
+func gcGoexit(gp *g) {
+
+	// Create a panic object for Goexit, so we can recognize when it might be
+	// bypassed by a recover().
+	var p _panic
+	p.goexit = true
+	p.link = gp._panic
+	gp._panic = (*_panic)(noescape(unsafe.Pointer(&p)))
+
+	for {
+		if gp._defer == nil {
+			break
+		} else {
+			popDefer(gp)
+			continue
+		}
+	}
+	gc_goexit0(gp)
+}
 
 // markroot scans the i'th root.
 //
@@ -159,7 +557,7 @@ var oneptrmask = [...]uint8{1}
 // nowritebarrier is only advisory here.
 //
 //go:nowritebarrier
-func markroot(gcw *gcWork, i uint32, flushBgCredit bool) int64 {
+func markroot(gcw *gcWork, i uint32, flushBgCredit bool, pd bool) int64 {
 	// Note: if you add a case here, please also update heapdump.go:dumproots.
 	var workDone int64
 	var workCounter *atomic.Int64
@@ -199,7 +597,7 @@ func markroot(gcw *gcWork, i uint32, flushBgCredit bool) int64 {
 			print("runtime: markroot index ", i, " not in stack roots range [", work.baseStacks, ", ", work.baseEnd, ")\n")
 			throw("markroot: bad index")
 		}
-		gp := work.stackRoots[i-work.baseStacks]
+		gp := (*g)(work.stackRoots[i-work.baseStacks])
 
 		// remember when we've first observed the G blocked
 		// needed only to output in traceback
@@ -211,6 +609,12 @@ func markroot(gcw *gcWork, i uint32, flushBgCredit bool) int64 {
 		// scanstack must be done on the system stack in case
 		// we're trying to scan our own stack.
 		systemstack(func() {
+			// Draining as part of partial deadlock detection.
+			// Do not suspend G.
+			if status == _Gunreachable {
+				gcGoexit(gp)
+			}
+
 			// If this is a self-scan, put the user G in
 			// _Gwaiting to prevent self-deadlock. It may
 			// already be in _Gwaiting if this is a mark
@@ -228,11 +632,12 @@ func markroot(gcw *gcWork, i uint32, flushBgCredit bool) int64 {
 			// we scan the stacks we can and ask running
 			// goroutines to scan themselves; and the
 			// second blocks.
-			stopped := suspendG(gp)
+			stopped := suspendG(gp, pd)
 			if stopped.dead {
 				gp.gcscandone = true
 				return
 			}
+
 			if gp.gcscandone {
 				throw("g already scanned")
 			}
@@ -1104,6 +1509,7 @@ const (
 	gcDrainFlushBgCredit
 	gcDrainIdle
 	gcDrainFractional
+	gcDrainPartialDeadlock
 )
 
 // gcDrainMarkWorkerIdle is a wrapper for gcDrain that exists to better account
@@ -1126,6 +1532,26 @@ func gcDrainMarkWorkerDedicated(gcw *gcWork, untilPreempt bool) {
 // mark time in profiles.
 func gcDrainMarkWorkerFractional(gcw *gcWork) {
 	gcDrain(gcw, gcDrainFractional|gcDrainUntilPreempt|gcDrainFlushBgCredit)
+}
+
+func gcUpdateMarkrootNext() (uint32, bool) {
+	var job uint32 = atomic.Load(&work.markrootNext)
+	var success bool
+
+	if job < atomic.Load(&work.markrootJobs) {
+		// still work available at the moment
+		for !success {
+			success = atomic.Cas(&work.markrootNext, job, job+1)
+			if success {
+				return job, true
+			}
+			job = atomic.Load(&work.markrootNext)
+			if job >= atomic.Load(&work.markrootJobs) {
+				return 0, false
+			}
+		}
+	}
+	return 0, false
 }
 
 // gcDrain scans roots and objects in work buffers, blackening grey
@@ -1187,19 +1613,69 @@ func gcDrain(gcw *gcWork, flags gcDrainFlags) {
 	}
 
 	// Drain root marking jobs.
-	if work.markrootNext < work.markrootJobs {
+	rootNext := atomic.Load(&work.markrootNext)
+	rootJobs := atomic.Load(&work.markrootJobs)
+	if rootNext < rootJobs {
+		if gcddtrace(1) || gcddtrace(2) {
+			validRoots := work.nValidStackRoots
+			roots := work.nStackRoots
+
+			println("\t\t===========================================================================\n"+
+				"\t\t[[[[ DRAINING ROOT MARKING JOBS :: Root next", rootNext, ", Root jobs", rootJobs, "]]]]\n"+
+				"\t\t[[[[ Valid Roots", validRoots, ", Roots", roots, "]]]]\n"+
+				"\t\t[[[[ Drain flags:",
+				"Until-preempt:", flags&gcDrainUntilPreempt != 0,
+				"; Flush-BG-credit:", flags&gcDrainFlushBgCredit != 0,
+				"; Idle:", flags&gcDrainIdle != 0,
+				"; Fractional:", flags&gcDrainFractional != 0,
+				"; Draining PDs:", flags&gcDrainPartialDeadlock != 0,
+				"]]]]\n"+
+					"\t\t===========================================================================")
+		}
+
 		// Stop if we're preemptible, if someone wants to STW, or if
 		// someone is calling forEachP.
 		for !(gp.preempt && (preemptible || sched.gcwaiting.Load() || pp.runSafePointFn != 0)) {
-			job := atomic.Xadd(&work.markrootNext, +1) - 1
-			if job >= work.markrootJobs {
+			job, success := gcUpdateMarkrootNext()
+			if !success {
+				if gcddtrace(1) || gcddtrace(2) {
+					println("\t==============================================\n" +
+						"\t[[[[ DRAINED ROOT MARKING OK (nomark)! ]]]]\n" +
+						"\t~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
+				}
 				break
 			}
-			markroot(gcw, job, flushBgCredit)
+			markroot(gcw, job, flushBgCredit, flags&gcDrainPartialDeadlock != 0)
 			if check != nil && check() {
+				if gcddtrace(1) || gcddtrace(2) {
+					println("\t==============================================\n" +
+						"\t[[[[ DRAINED ROOT MARKING OK (skip heap)! ]]]]\n" +
+						"\t~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
+				}
 				goto done
 			}
 		}
+	}
+
+	switch {
+	case gcddtrace(1):
+		println("\t=============================================\n" +
+			"\t[[[[ DRAINED ROOT MARKING OK (with heap) ]]]]\n" +
+			"\t~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
+	case gcddtrace(2):
+		validRoots := work.nValidStackRoots
+		roots := work.nStackRoots
+
+		println("\t\t===========================================================================\n"+
+			"\t\t[[[[ DRAINING HEAP MARKING JOBS :: Root next", rootNext, ", Root jobs", rootJobs, "]]]]\n"+
+			"\t\t[[[[ Valid Roots", validRoots, ", Roots", roots, "]]]]\n"+
+			"\t\t[[[[ Drain flags:",
+			"Until-preempt:", flags&gcDrainUntilPreempt != 0,
+			"Flush-BG-credit:", flags&gcDrainFlushBgCredit != 0,
+			"Idle:", flags&gcDrainIdle != 0,
+			"Fractional:", flags&gcDrainFractional != 0,
+			"]]]]\n"+
+				"\t\t===========================================================================")
 	}
 
 	// Drain heap marking jobs.
@@ -1260,6 +1736,23 @@ func gcDrain(gcw *gcWork, flags gcDrainFlags) {
 		}
 	}
 
+	if gcddtrace(2) {
+		validRoots := work.nValidStackRoots
+		roots := work.nStackRoots
+
+		println("\t\t===========================================================================\n"+
+			"\t\t[[[[ FLUSHING REMAINING SCAN WORK CREDIT :: Root next", rootNext, ", Root jobs", rootJobs, "]]]]\n"+
+			"\t\t[[[[ Valid Roots", validRoots, ", Roots", roots, "]]]]\n"+
+			"\t\t[[[[ Drain flags:",
+			"Until-preempt:", flags&gcDrainUntilPreempt != 0,
+			"; Flush-BG-credit:", flags&gcDrainFlushBgCredit != 0,
+			"; Idle:", flags&gcDrainIdle != 0,
+			"; Fractional:", flags&gcDrainFractional != 0,
+			"; Draining PDs:", flags&gcDrainPartialDeadlock != 0,
+			"]]]]\n"+
+				"\t\t===========================================================================")
+	}
+
 done:
 	// Flush remaining scan work credit.
 	if gcw.heapScanWork > 0 {
@@ -1315,10 +1808,12 @@ func gcDrainN(gcw *gcWork, scanWork int64) int64 {
 
 		if b == 0 {
 			// Try to do a root job.
-			if work.markrootNext < work.markrootJobs {
-				job := atomic.Xadd(&work.markrootNext, +1) - 1
-				if job < work.markrootJobs {
-					workFlushed += markroot(gcw, job, false)
+			rootNext := atomic.Load(&work.markrootNext)
+			rootJobs := atomic.Load(&work.markrootJobs)
+			if rootNext < rootJobs {
+				job, success := gcUpdateMarkrootNext()
+				if success {
+					workFlushed += markroot(gcw, job, false, false)
 					continue
 				}
 			}
@@ -1478,6 +1973,20 @@ func scanobject(b uintptr, gcw *gcWork) {
 		// At this point we have extracted the next potential pointer.
 		// Quickly filter out nil and pointers back to the current object.
 		if obj != 0 && obj-b >= n {
+			if gc_ptr_is_masked(unsafe.Pointer(obj)) {
+				// if gcddtrace(2) {
+				// 	obj = uintptr(gc_undo_mask_ptr(unsafe.Pointer(obj)))
+				// 	println("\t\t|>|>|> src/runtime/mgcmark.go:1941 scanobject", hex(obj), "in span", hex(s.base()), "Object size:", n, "\n"+
+				// 		"\t\t\t\tSkipped marking masked address :: Address b:", hex(b), "Address addr:", hex(addr), "Address obj:", hex(obj))
+				// 	_, span, objIndex := findObject(obj, 0, 0)
+				// 	if span != nil {
+				// 		println("\t\t\t\tisMarked:", span.markBitsForIndex(objIndex).isMarked())
+				// 	}
+				// }
+				// ANGE XXX: this pointer is a gp pointer intentionally masked
+				// so that we will skip scanning it
+				return
+			}
 			// Test if obj points into the Go heap and, if so,
 			// mark the object.
 			//

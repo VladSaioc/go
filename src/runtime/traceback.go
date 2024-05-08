@@ -796,7 +796,7 @@ func printcreatedby1(f funcInfo, pc uintptr, goid uint64) {
 }
 
 func traceback(pc, sp, lr uintptr, gp *g) {
-	traceback1(pc, sp, lr, gp, 0)
+	traceback1(pc, sp, lr, gp, 1)
 }
 
 // tracebacktrap is like traceback but expects that the PC and SP were obtained
@@ -1182,14 +1182,15 @@ func elideWrapperCalling(id abi.FuncID) bool {
 }
 
 var gStatusStrings = [...]string{
-	_Gidle:      "idle",
-	_Grunnable:  "runnable",
-	_Grunning:   "running",
-	_Gsyscall:   "syscall",
-	_Gwaiting:   "waiting",
-	_Gdead:      "dead",
-	_Gcopystack: "copystack",
-	_Gpreempted: "preempted",
+	_Gidle:        "idle",
+	_Grunnable:    "runnable",
+	_Grunning:     "running",
+	_Gsyscall:     "syscall",
+	_Gwaiting:     "waiting",
+	_Gdead:        "dead",
+	_Gcopystack:   "copystack",
+	_Gpreempted:   "preempted",
+	_Gunreachable: "unreachable",
 }
 
 func goroutineheader(gp *g) {

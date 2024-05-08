@@ -100,9 +100,13 @@ type suspendGState struct {
 // directly schedule the waiter. The context switch is unavoidable in
 // the signal case.
 //
+// FIXME: Improve calling this from the non-preemptible garbage detector,
+// OR, alternatively, figure out how to make the garbage detector preemptible
+// (maybe wake up the run-time workers again?).
+//
 //go:systemstack
-func suspendG(gp *g) suspendGState {
-	if mp := getg().m; mp.curg != nil && readgstatus(mp.curg) == _Grunning {
+func suspendG(gp *g, pd bool) suspendGState {
+	if mp := getg().m; !pd && mp.curg != nil && readgstatus(mp.curg) == _Grunning {
 		// Since we're on the system stack of this M, the user
 		// G is stuck at an unsafe point. If another goroutine
 		// were to try to preempt m.curg, it could deadlock.
