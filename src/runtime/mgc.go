@@ -1253,30 +1253,32 @@ func detectPartialDeadlocks() {
 		var gp *g = (*g)(gc_undo_mask_ptr(work.stackRoots[i]))
 		work.stackRoots[i] = unsafe.Pointer(gp)
 		oldStatus := readgstatus(gp)
+		switch oldStatus {
+		case _Gwaiting:
+		default:
+			continue
+		}
 		// If g was marked somehow, skip it.
 		if stackRootValid(gp) {
 			println("\t\t[VALID AFTER ROOT] Goroutine", gp, "[", i, "] was in unrunnable set at the end.")
 			// FIXME: Log how often this happens.
 			continue
-		} else {
-			if checkIfMarked(unsafe.Pointer(gp)) {
-				println("\t\t[MARKED INVALID STACK] Goroutine", gp, "[", i, "] is marked somehow but not valid.")
-			}
+			// } else {
+			// 	if checkIfMarked(unsafe.Pointer(gp)) {
+			// 		println("\t\t[MARKED INVALID STACK] Goroutine", gp, "[", i, "] is marked somehow but not valid.")
+			// 		// Skip it just in case.
+			// 		continue
+			// 	}
 		}
-		switch oldStatus {
-		case _Gwaiting:
-			// What if a goroutine is spawned after we're done marking?
-			// FIXME: Freeze the n.StackRoots value at GC BG mark start time, and do not operate on any G's
-			// that are `above` this index until the next GC cycle?
-			//
-			// Must make sure that all other goroutines are marked, so don't unmask them.
-		case _Grunnable, _Grunning:
-			// Go runtime might have spawned a new goroutine in the mean time(?).
-			throw("Runnable goroutine found during partial deadlock detection.")
-		default:
-			println("Supposedly unreachable goroutine", gp, "has status", oldStatus)
-			throw("Unexpected status of an unreachable goroutine")
-		}
+		// What if a goroutine is spawned after we're done marking?
+		// FIXME: Freeze the n.StackRoots value at GC BG mark start time, and do not operate on any G's
+		// that are `above` this index until the next GC cycle?
+		//
+		// Must make sure that all other goroutines are marked, so don't unmask them.
+		// default:
+		// 	println("Supposedly unreachable goroutine", gp, "has status", oldStatus)
+		// 	throw("Unexpected status of an unreachable goroutine")
+		// }
 		println("\t\t[[DEADLOCK]]", i, ":", goroutineHeader(gp))
 		casgstatus(gp, _Gwaiting, _Gunreachable)
 	}
