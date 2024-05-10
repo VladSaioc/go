@@ -833,6 +833,8 @@ func gcMarkDone() {
 	// time.
 	semacquire(&work.markDoneSema)
 
+	// Flag marking whether we performed partial deadlock detection in this cycle.
+	detectedDeadlocks := false
 top:
 	// Re-check transition condition under transition lock.
 	//
@@ -913,6 +915,9 @@ top:
 			}
 		}
 	})
+
+	// If we are certain that there are more marking jobs to complete,
+	// run a restart without deadlock detection.
 	if restart {
 		getg().m.preemptoff = ""
 		systemstack(func() {
@@ -921,28 +926,37 @@ top:
 		})
 		semrelease(&worldsema)
 		goto top
-	}
-
-	detectPartialDeadlocks()
-
-top2:
-	systemstack(func() {
-		for _, p := range allp {
-			wbBufFlush1(p)
-			if !p.gcw.empty() {
-				restart = true
-				break
-			}
+	} else {
+		// Otherwise, do a deadlock detection round.
+		// Only do one deadlock detection round per GC cycle.
+		if !detectedDeadlocks {
+			detectPartialDeadlocks()
+			detectedDeadlocks = true
 		}
-	})
-	if restart {
-		getg().m.preemptoff = ""
+
+		// Check again whether any P needs to flush its write barrier
+		// to the GC work queue.
 		systemstack(func() {
-			now := startTheWorldWithSema(0, stw)
-			work.pauseNS += now - stw.start
+			for _, p := range allp {
+				wbBufFlush1(p)
+				if !p.gcw.empty() {
+					restart = true
+					break
+				}
+			}
 		})
-		semrelease(&worldsema)
-		goto top2
+
+		// If that is the case, restart again. Once restarts are no longer needed,
+		// run this without deadlock detection.
+		if restart {
+			getg().m.preemptoff = ""
+			systemstack(func() {
+				now := startTheWorldWithSema(0, stw)
+				work.pauseNS += now - stw.start
+			})
+			semrelease(&worldsema)
+			goto top
+		}
 	}
 
 	gcComputeStartingStackSize()
