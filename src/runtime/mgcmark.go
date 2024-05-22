@@ -557,7 +557,9 @@ func gcGoexit(gp *g) {
 // nowritebarrier is only advisory here.
 //
 //go:nowritebarrier
-func markroot(gcw *gcWork, i uint32, flushBgCredit bool, pd bool) int64 {
+func markroot(gcw *gcWork, i uint32, flags gcDrainFlags) int64 {
+	flushBgCredit := flags&gcDrainFlushBgCredit != 0
+	drainPartialDeadlocks := flags&gcDrainPartialDeadlock != 0
 	// Note: if you add a case here, please also update heapdump.go:dumproots.
 	var workDone int64
 	var workCounter *atomic.Int64
@@ -610,9 +612,15 @@ func markroot(gcw *gcWork, i uint32, flushBgCredit bool, pd bool) int64 {
 		// we're trying to scan our own stack.
 		systemstack(func() {
 			// Draining as part of partial deadlock detection.
-			// Do not suspend G.
 			if status == _Gunreachable {
+				gp.gcscandone = true
 				gcGoexit(gp)
+				return
+			}
+
+			// Do not suspend goroutines when draining for deadlock detection.
+			if drainPartialDeadlocks {
+				return
 			}
 
 			// If this is a self-scan, put the user G in
@@ -632,7 +640,7 @@ func markroot(gcw *gcWork, i uint32, flushBgCredit bool, pd bool) int64 {
 			// we scan the stacks we can and ask running
 			// goroutines to scan themselves; and the
 			// second blocks.
-			stopped := suspendG(gp, pd)
+			stopped := suspendG(gp)
 			if stopped.dead {
 				gp.gcscandone = true
 				return
@@ -1528,6 +1536,12 @@ func gcDrainMarkWorkerDedicated(gcw *gcWork, untilPreempt bool) {
 	gcDrain(gcw, flags)
 }
 
+// gcDrainMarkWorkerDedicated is a wrapper for gcDrain that exists to better account
+// mark time in profiles.
+func gcDrainMarkWorkerPartialDeadlocks(gcw *gcWork) {
+	gcDrain(gcw, gcDrainFlushBgCredit|gcDrainUntilPreempt|gcDrainPartialDeadlock)
+}
+
 // gcDrainMarkWorkerFractional is a wrapper for gcDrain that exists to better account
 // mark time in profiles.
 func gcDrainMarkWorkerFractional(gcw *gcWork) {
@@ -1535,19 +1549,23 @@ func gcDrainMarkWorkerFractional(gcw *gcWork) {
 }
 
 func gcUpdateMarkrootNext() (uint32, bool) {
-	var job uint32 = atomic.Load(&work.markrootNext)
+	var next uint32 = atomic.Load(&work.markrootNext)
 	var success bool
 
-	if job < atomic.Load(&work.markrootJobs) {
+	if next < atomic.Load(&work.markrootJobs) {
 		// still work available at the moment
 		for !success {
-			success = atomic.Cas(&work.markrootNext, job, job+1)
+			success = atomic.Cas(&work.markrootNext, next, next+1)
+			// We manage to snatch a root job. Return the root index.
 			if success {
-				return job, true
+				return next, true
 			}
-			job = atomic.Load(&work.markrootNext)
-			if job >= atomic.Load(&work.markrootJobs) {
-				return 0, false
+
+			// Get the latest value of markrootNext.
+			next = atomic.Load(&work.markrootNext)
+			// We are out of markroot jobs.
+			if next >= atomic.Load(&work.markrootJobs) {
+				break
 			}
 		}
 	}
@@ -1638,20 +1656,10 @@ func gcDrain(gcw *gcWork, flags gcDrainFlags) {
 		for !(gp.preempt && (preemptible || sched.gcwaiting.Load() || pp.runSafePointFn != 0)) {
 			job, success := gcUpdateMarkrootNext()
 			if !success {
-				if gcddtrace(1) || gcddtrace(2) {
-					println("\t==============================================\n" +
-						"\t[[[[ DRAINED ROOT MARKING OK (nomark)! ]]]]\n" +
-						"\t~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
-				}
 				break
 			}
-			markroot(gcw, job, flushBgCredit, flags&gcDrainPartialDeadlock != 0)
+			markroot(gcw, job, flags)
 			if check != nil && check() {
-				if gcddtrace(1) || gcddtrace(2) {
-					println("\t==============================================\n" +
-						"\t[[[[ DRAINED ROOT MARKING OK (skip heap)! ]]]]\n" +
-						"\t~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
-				}
 				goto done
 			}
 		}
@@ -1813,7 +1821,7 @@ func gcDrainN(gcw *gcWork, scanWork int64) int64 {
 			if rootNext < rootJobs {
 				job, success := gcUpdateMarkrootNext()
 				if success {
-					workFlushed += markroot(gcw, job, false, false)
+					workFlushed += markroot(gcw, job, 0)
 					continue
 				}
 			}
@@ -1974,17 +1982,7 @@ func scanobject(b uintptr, gcw *gcWork) {
 		// Quickly filter out nil and pointers back to the current object.
 		if obj != 0 && obj-b >= n {
 			if gc_ptr_is_masked(unsafe.Pointer(obj)) {
-				// if gcddtrace(2) {
-				// 	obj = uintptr(gc_undo_mask_ptr(unsafe.Pointer(obj)))
-				// 	println("\t\t|>|>|> src/runtime/mgcmark.go:1941 scanobject", hex(obj), "in span", hex(s.base()), "Object size:", n, "\n"+
-				// 		"\t\t\t\tSkipped marking masked address :: Address b:", hex(b), "Address addr:", hex(addr), "Address obj:", hex(obj))
-				// 	_, span, objIndex := findObject(obj, 0, 0)
-				// 	if span != nil {
-				// 		println("\t\t\t\tisMarked:", span.markBitsForIndex(objIndex).isMarked())
-				// 	}
-				// }
-				// ANGE XXX: this pointer is a gp pointer intentionally masked
-				// so that we will skip scanning it
+				// Skip masked pointers.
 				return
 			}
 			// Test if obj points into the Go heap and, if so,

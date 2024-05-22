@@ -1096,10 +1096,8 @@ func gcDiscoverMoreStackRoots(myId uint32) (bool, bool) {
 	// vIndex and ivIndex.  During the loop, anything < vIndex should be
 	// valid stackRoots and anything >= ivIndex should be invalid stackRoots
 	// and the loop terminates when the two indices meet
-	var vIndex int = work.nValidStackRoots
-	var ivIndex int = work.nStackRoots
+	var vIndex, ivIndex int = work.nValidStackRoots, work.nStackRoots
 
-	// FIXME: Infinite loop here(? Need to figure out why)
 	if gcddtrace(2) {
 		println("\t≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠\n"+
 			"\t[[[[[[[[[ (", myId, ") DISCOVERING MORE STACK ROOTS ]]]]]]]]]\n"+
@@ -1123,7 +1121,7 @@ func gcDiscoverMoreStackRoots(myId uint32) (bool, bool) {
 				}
 				swapGp := gc_undo_mask_ptr(work.stackRoots[ivIndex])
 				if stackRootValid((*g)(swapGp)) {
-					if gcddtrace(2) || gcddtrace(1) {
+					if gcddtrace(1) {
 						println("\t\t>>> (", myId, ") Swapped runnable goroutine", ivIndex, "(", swapGp, ") with blocked goroutine", vIndex, "(", unsafe.Pointer(gp), ")")
 					}
 					work.stackRoots[ivIndex] = p
@@ -1138,7 +1136,7 @@ func gcDiscoverMoreStackRoots(myId uint32) (bool, bool) {
 	var oldRootJobs int32 = int32(atomic.Load(&work.markrootJobs))
 	var newRootJobs int32 = int32(work.baseStacks) + int32(vIndex)
 
-	if gcddtrace(1) || gcddtrace(2) {
+	if gcddtrace(1) {
 		println("\t\t(", myId, ")====================================\n"+
 			"\t\tGOROUTINE REORDERING DONE\n"+
 			"\t\t[ vIndex:", vIndex, "] [ Base stacks:", int32(work.baseStacks), "] [ ivIndex:", ivIndex, "]\n"+
@@ -1156,7 +1154,7 @@ func gcDiscoverMoreStackRoots(myId uint32) (bool, bool) {
 	// ANGE XXX end of sanity check
 
 	if newRootJobs > oldRootJobs {
-		if gcddtrace(1) || gcddtrace(2) {
+		if gcddtrace(1) {
 			print("\t\t[[ ", newRootJobs-oldRootJobs, " more stackRoots discovered ]]\n")
 		}
 		// reset markrootNext as it could have been incremented past markrootJobs
@@ -1168,7 +1166,7 @@ func gcDiscoverMoreStackRoots(myId uint32) (bool, bool) {
 	// myOldRootNext := atomic.Loadint32(&work.myMarkrootNext[myId])
 	newRootNext := int32(atomic.Load(&work.markrootNext))
 	atomic.Storeint32(&work.myMarkrootNext[myId], newRootNext)
-	if gcddtrace(1) || gcddtrace(2) {
+	if gcddtrace(1) {
 		println("\t\t(", myId, ")==============================================\n"+
 			"\t\t[ vIndex:", vIndex, "] [ Base stacks:", int32(work.baseStacks), "] [ ivIndex:", ivIndex, "]\n"+
 			"\t\t[ oldRootJobs:", oldRootJobs, "] [ newRootJobs:", newRootJobs, "] [ newRootNext", newRootNext, "]\n"+
@@ -1185,14 +1183,8 @@ func gcDiscoverMoreStackRoots(myId uint32) (bool, bool) {
 		}
 		throw("len of myMarkRootNext < gomaxprocs")
 	}
-	if gcddtrace(1) {
-		println("\t\t==============================================")
-	}
 	for i := 0; i < len(work.myMarkrootNext); i++ {
 		otherRootNext := atomic.Loadint32(&work.myMarkrootNext[i])
-		if gcddtrace(1) {
-			println("\t\tmyMarkrootNext[", i, "] = ", otherRootNext)
-		}
 		// some worker may show up really late or never join for this GC cycle.
 		// those would have a otherRootJobs value of 0; if our value is also 0,
 		// we will have a smaller myId than that worker; if our value is > 0,
@@ -1205,10 +1197,6 @@ func gcDiscoverMoreStackRoots(myId uint32) (bool, bool) {
 			break
 		}
 	}
-	if gcddtrace(1) {
-		println("\t\t~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
-	}
-
 	unlock(&work.stackRootsLock)
 
 	return moreRoots, isLast
@@ -1228,15 +1216,14 @@ func detectPartialDeadlocks() {
 		return
 	}
 
-	if gcddtrace(2) {
+	if gcddtrace(1) || gcddtrace(2) {
 		println("≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠\n"+
-			"[[[[[[[[[[[[[[[[[[ GC:", work.cycles.Load(), ":: DETECT DEADLOCKS ]]]]]]]]]]]]]]]]]]\n"+
+			"[[[[[[[[[[[[[[[[ GC:", work.cycles.Load(), ":: DETECT DEADLOCKS ]]]]]]]]]]]]]]]]\n"+
 			"≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠")
 	}
 
 	lock(&work.stackRootsLock)
 	// ANGE XXX: sanity check
-	// FIXME: Do another reordering here?
 	for i := 0; i < work.nValidStackRoots; i++ {
 		var gp *g = (*g)(work.stackRoots[i])
 		if gc_ptr_is_masked(unsafe.Pointer(gp)) {
@@ -1263,43 +1250,51 @@ func detectPartialDeadlocks() {
 			throw("Invalid stack root is scanned.")
 		}
 	}
+
+	// Try to reach another fix point here. Keep scouting for runnable goroutines until
+	// none are left.
+	for stillWorking := true; stillWorking; {
+		stillWorking = false
+
+		// Valid goroutines may be found after all GC work is drained.
+		// Make sure these are pushed to the runnable set and ready to be marked.
+		for i := work.nValidStackRoots; i < work.nStackRoots; i++ {
+			var gp *g = (*g)(gc_undo_mask_ptr(work.stackRoots[i]))
+			if readgstatus(gp) == _Gwaiting && !stackRootValid(gp) {
+				// Blocking unrunnable goroutines will be skipped.
+				continue
+			}
+			work.stackRoots[i] = work.stackRoots[work.nValidStackRoots]
+			work.stackRoots[work.nValidStackRoots] = unsafe.Pointer(gp)
+			atomic.Xadd((*uint32)(unsafe.Pointer(&work.nValidStackRoots)), uint32(work.nValidStackRoots+1))
+			// We now have one more markroot job.
+			atomic.Store((*uint32)(unsafe.Pointer(&work.markrootJobs)), uint32(work.markrootJobs+1))
+			// We might still have some work to do.
+			// Make sure in the next iteration we will check re-check for new runnable goroutines.
+			stillWorking = true
+		}
+		// Perform marking.
+		for _, pp := range allp {
+			gcDrainMarkWorkerPartialDeadlocks(&pp.gcw)
+		}
+	}
+
+	// For the remaining goroutines, mark them as unreachable and deadlocking.
 	for i := work.nValidStackRoots; i < work.nStackRoots; i++ {
-		var gp *g = (*g)(gc_undo_mask_ptr(work.stackRoots[i]))
-		work.stackRoots[i] = unsafe.Pointer(gp)
-		oldStatus := readgstatus(gp)
-		switch oldStatus {
-		case _Gwaiting:
-		default:
-			continue
+		gp := (*g)(gc_undo_mask_ptr(work.stackRoots[i]))
+		if readgstatus(gp) != _Gwaiting {
+			println("\t\t[INVALID STATUS] Goroutine", gp, "[", i, "] was in unrunnable set at the end.")
+			throw("Invalid goroutine status.")
 		}
-		// If g was marked somehow, skip it.
-		if stackRootValid(gp) {
-			println("\t\t[VALID AFTER ROOT] Goroutine", gp, "[", i, "] was in unrunnable set at the end.")
-			// FIXME: Log how often this happens.
-			continue
-			// } else {
-			// 	if checkIfMarked(unsafe.Pointer(gp)) {
-			// 		println("\t\t[MARKED INVALID STACK] Goroutine", gp, "[", i, "] is marked somehow but not valid.")
-			// 		// Skip it just in case.
-			// 		continue
-			// 	}
-		}
-		// What if a goroutine is spawned after we're done marking?
-		// FIXME: Freeze the n.StackRoots value at GC BG mark start time, and do not operate on any G's
-		// that are `above` this index until the next GC cycle?
-		//
-		// Must make sure that all other goroutines are marked, so don't unmask them.
-		// default:
-		// 	println("Supposedly unreachable goroutine", gp, "has status", oldStatus)
-		// 	throw("Unexpected status of an unreachable goroutine")
-		// }
 		println("\t\t[[DEADLOCK]]", i, ":", goroutineHeader(gp))
 		casgstatus(gp, _Gwaiting, _Gunreachable)
+		work.stackRoots[i] = unsafe.Pointer(gp)
 	}
-	atomic.Store(&work.markrootJobs, fixedRootCount+uint32(work.nDataRoots)+uint32(work.nBSSRoots)+uint32(work.nSpanRoots)+uint32(work.nStackRoots))
-
-	gcw := &getg().m.p.ptr().gcw
-	gcDrain(gcw, gcDrainPartialDeadlock)
+	// Put the remaining roots as ready for marking and drain them.
+	atomic.Store(&work.markrootJobs, work.markrootJobs+uint32(work.nStackRoots-work.nValidStackRoots))
+	for _, pp := range allp {
+		gcDrainMarkWorkerPartialDeadlocks(&pp.gcw)
+	}
 	work.nValidStackRoots = work.nStackRoots
 	unlock(&work.stackRootsLock)
 }
@@ -1897,10 +1892,6 @@ func gcBgMarkWorker(ready chan struct{}) {
 					// to gcMarkWorkAvailable, the jobs generated may have been claimed by other
 					// workers.  In that case, the last worker still need to call gcDiscoverMoreRoots
 					// one last time to update its snapshot of myMarkrootNext instead of breaking out
-					switch {
-					case gcddtrace(2):
-						println("\t===[[[ NO MORE NEW ROOTS DISCOVERED (", myId, ") ]]]===")
-					}
 					atomic.Storeint32(&work.myMarkrootNext[myId], -1)
 					break
 				}
