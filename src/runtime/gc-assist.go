@@ -134,7 +134,7 @@ func userGoroutineReport(gp *g) string {
 
 	gstatus := readgstatus(gp) &^ _Gscan
 	status := stringFromValues("\t\t\t====[GOROUTINE:", name, "("+gStatusStrings[gstatus]+")]====")
-	if gp.m != nil && gcddtrace(1) {
+	if gp.m != nil {
 		status += stringFromValues("\n\t\t\t\tG0 (addr):", gp.m.g0, ", Stack:", gp.m.g0.stack.lo, "-", gp.m.g0.stack.hi)
 	}
 	status += stringFromValues("\n\t\t\t\tG (addr):", gp, ", Stack:", gp.stack.lo, "-", gp.stack.hi)
@@ -208,7 +208,7 @@ func printGoroutineReport(gp *g) {
 
 	status := readgstatus(gp) &^ _Gscan
 	println("\t\t\t====[GOROUTINE:", name, "[", gp, "] (", gStatusStrings[status]+")]====")
-	if gcddtrace(1) && gp.m != nil {
+	if gp.m != nil {
 		println("\t\t\t\tG0 (addr):", gp.m.g0, ", Stack:", gp.m.g0.stack.lo, "-", gp.m.g0.stack.hi)
 	}
 	println("\t\t\t\tStack:", hex(gp.stack.lo), "-", hex(gp.stack.hi), "\n"+
@@ -223,8 +223,5 @@ func printGoroutineReport(gp *g) {
 	if gp.waiting_sema != nil {
 		sema := gc_undo_mask_ptr(gp.waiting_sema)
 		println("\t\t\t\tSema:", sema, ":: Marked:", isMarked(sema))
-	}
-	if gcddtrace(1) {
-		println("\t\t\t====[END GOROUTINE REPORT:", gp, "]====")
 	}
 }
