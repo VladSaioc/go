@@ -1266,7 +1266,7 @@ func detectPartialDeadlocks() {
 			}
 			work.stackRoots[i] = work.stackRoots[work.nValidStackRoots]
 			work.stackRoots[work.nValidStackRoots] = unsafe.Pointer(gp)
-			atomic.Xadd((*uint32)(unsafe.Pointer(&work.nValidStackRoots)), uint32(work.nValidStackRoots+1))
+			atomic.Store((*uint32)(unsafe.Pointer(&work.nValidStackRoots)), uint32(work.nValidStackRoots+1))
 			// We now have one more markroot job.
 			atomic.Store((*uint32)(unsafe.Pointer(&work.markrootJobs)), uint32(work.markrootJobs+1))
 			// We might still have some work to do.
