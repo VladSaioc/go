@@ -105,8 +105,8 @@ type suspendGState struct {
 // (maybe wake up the run-time workers again?).
 //
 //go:systemstack
-func suspendG(gp *g) suspendGState {
-	if mp := getg().m; mp.curg != nil && readgstatus(mp.curg) == _Grunning {
+func suspendG(gp *g, pd bool) suspendGState {
+	if mp := getg().m; !pd && mp.curg != nil && readgstatus(mp.curg) == _Grunning {
 		// Since we're on the system stack of this M, the user
 		// G is stuck at an unsafe point. If another goroutine
 		// were to try to preempt m.curg, it could deadlock.

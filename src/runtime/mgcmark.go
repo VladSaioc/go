@@ -613,14 +613,7 @@ func markroot(gcw *gcWork, i uint32, flags gcDrainFlags) int64 {
 		systemstack(func() {
 			// Draining as part of partial deadlock detection.
 			if status == _Gunreachable {
-				gp.gcscandone = true
 				gcGoexit(gp)
-				return
-			}
-
-			// Do not suspend goroutines when draining for deadlock detection.
-			if drainPartialDeadlocks {
-				return
 			}
 
 			// If this is a self-scan, put the user G in
@@ -640,7 +633,7 @@ func markroot(gcw *gcWork, i uint32, flags gcDrainFlags) int64 {
 			// we scan the stacks we can and ask running
 			// goroutines to scan themselves; and the
 			// second blocks.
-			stopped := suspendG(gp)
+			stopped := suspendG(gp, drainPartialDeadlocks)
 			if stopped.dead {
 				gp.gcscandone = true
 				return
