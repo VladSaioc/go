@@ -88,7 +88,9 @@ const (
 	_Gpreempted // 9
 
 	// ANGE XXX: Added new status to keep track of unreachable goroutines
+	// and goroutines that have been deadlocked
 	_Gunreachable // 10
+	_Gdeadlocked  // 11
 
 	// _Gscan combined with one of the above states other than
 	// _Grunning indicates that GC is scanning the stack. The
@@ -101,12 +103,13 @@ const (
 	//
 	// atomicstatus&~Gscan gives the state the goroutine will
 	// return to when the scan completes.
-	_Gscan          = 0x1000
-	_Gscanrunnable  = _Gscan + _Grunnable  // 0x1001
-	_Gscanrunning   = _Gscan + _Grunning   // 0x1002
-	_Gscansyscall   = _Gscan + _Gsyscall   // 0x1003
-	_Gscanwaiting   = _Gscan + _Gwaiting   // 0x1004
-	_Gscanpreempted = _Gscan + _Gpreempted // 0x1009
+	_Gscan           = 0x1000
+	_Gscanrunnable   = _Gscan + _Grunnable   // 0x1001
+	_Gscanrunning    = _Gscan + _Grunning    // 0x1002
+	_Gscansyscall    = _Gscan + _Gsyscall    // 0x1003
+	_Gscanwaiting    = _Gscan + _Gwaiting    // 0x1004
+	_Gscanpreempted  = _Gscan + _Gpreempted  // 0x1009
+	_Gscandeadlocked = _Gscan + _Gdeadlocked // 0x100b
 )
 
 const (
