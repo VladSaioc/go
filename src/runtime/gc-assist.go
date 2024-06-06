@@ -153,7 +153,7 @@ func userGoroutineReport(gp *g) string {
 			if isMarked(unsafe.Pointer(sg.c)) {
 				marked = "marked"
 			}
-			status += stringFromValues("\n\t\t\t\tChannel:", sg.c, "("+marked+")")
+			status += stringFromValues("\n\t\t\t\tSudog:", unsafe.Pointer(sg), "Channel:", sg.c, "("+marked+")")
 		}
 	}
 	if gp.waiting_sema != nil {
@@ -217,7 +217,7 @@ func printGoroutineReport(gp *g) {
 		"\t\t\t\tWait Reason:", gp.waitreason.String())
 	for sg := gp.waiting; sg != nil; sg = sg.waitlink {
 		if sg.c != nil {
-			println("\t\t\t\tChannel:", sg.c, ":: Marked:", isMarked(unsafe.Pointer(sg.c)))
+			println("\t\t\t\tSudog:", unsafe.Pointer(sg), "Channel:", sg.c, ":: Marked:", isMarked(unsafe.Pointer(sg.c)))
 		}
 	}
 	if gp.waiting_sema != nil {
