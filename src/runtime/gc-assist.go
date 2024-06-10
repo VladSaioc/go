@@ -209,7 +209,7 @@ func printGoroutineReport(gp *g) {
 	status := readgstatus(gp) &^ _Gscan
 	println("\t\t\t====[GOROUTINE:", name, "[", gp, "] (", gStatusStrings[status], ")]====")
 	if gp.m != nil {
-		println("\t\t\t\tG0 (addr):", gp.m.g0, ", Stack:", gp.m.g0.stack.lo, "-", gp.m.g0.stack.hi)
+		println("\t\t\t\tG0 (addr):", gp.m.g0, ", Stack:", unsafe.Pointer(gp.m.g0.stack.lo), "-", unsafe.Pointer(gp.m.g0.stack.hi))
 	}
 	println("\t\t\t\tStack:", hex(gp.stack.lo), "-", hex(gp.stack.hi), "\n",
 		"\t\t\t\tScan done:", gp.gcscandone, "; Marked", isMarked(unsafe.Pointer(gp)), "\n",
@@ -224,4 +224,6 @@ func printGoroutineReport(gp *g) {
 		sema := gc_undo_mask_ptr(gp.waiting_sema)
 		println("\t\t\t\tSema:", sema, ":: Marked:", isMarked(sema))
 	}
+	println("\t\t\t\tasyncSafePoint:", gp.asyncSafePoint, "activeStackChans:", gp.activeStackChans, "parkingOnChan:", gp.parkingOnChan.Load(), "\n",
+		"\t\t\t\tpreempt:", gp.preempt, "preemptStop:", gp.preemptStop, "preemptShrinkStack:", gp.preemptShrink)
 }
