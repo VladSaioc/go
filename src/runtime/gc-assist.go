@@ -179,15 +179,6 @@ func userGoroutineReport(gp *g) string {
 	return status
 }
 
-// go:systemstack
-func goroutineHeader(gp *g) string {
-	fn := findfunc(gp.startpc)
-	if fn.valid() {
-		return "====[GOROUTINE: " + funcname(fn) + " (" + hexString(hex(uintptr(unsafe.Pointer(gp)))) + ")]===="
-	}
-	return "unnamed goroutine"
-}
-
 // Use this to print in systemstack.
 //
 // go:systemstack

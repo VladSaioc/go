@@ -1242,12 +1242,18 @@ func detectPartialDeadlocks() {
 	// For the remaining goroutines, mark them as unreachable and deadlocking.
 	for i := work.nValidStackRoots; i < work.nStackRoots; i++ {
 		gp := (*g)(gc_undo_mask_ptr(work.stackRoots[i]))
-		if readgstatus(gp) != _Gwaiting {
-			println("\t\t[INVALID STATUS] Goroutine", gp, "[", i, "] was in unrunnable set at the end.")
+		if status := readgstatus(gp); status != _Gwaiting {
+			println("\t\t[INVALID STATUS] goroutine", gp.goid, "was in unrunnable set with status:", gStatusStrings[status])
 			throw("Invalid goroutine status.")
 		}
-		println("\t\t[[DEADLOCK]]", i, ":", goroutineHeader(gp))
 		casgstatus(gp, _Gwaiting, _Gunreachable)
+		fn := findfunc(gp.startpc)
+		if fn.valid() {
+			print("partial deadlock! goroutine ", gp.goid, ": ", funcname(fn), "\n")
+		} else {
+			print("partial deadlock! goroutine ", gp.goid, ": !unnamed goroutine!", "\n")
+		}
+		traceback(gp.sched.pc, gp.sched.sp, gp.sched.lr, gp)
 		work.stackRoots[i] = unsafe.Pointer(gp)
 	}
 	// Put the remaining roots as ready for marking and drain them.
