@@ -826,7 +826,7 @@ var gcMarkDoneFlushed uint32
 func gcMarkDone() {
 	if gcddtrace(1) || gcddtrace(2) {
 		println("≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠\n"+
-			"[[[[[[[[[[[[[[[[ GC:", work.cycles.Load(), ":: III. MARK DONE ]]]]]]]]]]]]]]]]\n"+
+			"[[[[[[[[[[[[[[[[ GC:", work.cycles.Load(), ":: II. MARK DONE ]]]]]]]]]]]]]]]]\n"+
 			"≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠")
 	}
 	// Ensure only one thread is running the ragged barrier at a
@@ -1146,12 +1146,8 @@ func gcDiscoverMoreStackRoots(myId uint32) (bool, bool) {
 	}
 
 	if oldRootJobs > newRootJobs {
-		if debug.gcddtrace != 0 {
-			println("XXX oldRootJobs: ", oldRootJobs, "newRootJobs: ", newRootJobs)
-		}
 		throw("oldRootJobs > newRootJobs!")
 	}
-	// ANGE XXX end of sanity check
 
 	if newRootJobs > oldRootJobs {
 		if gcddtrace(1) {
@@ -1166,14 +1162,6 @@ func gcDiscoverMoreStackRoots(myId uint32) (bool, bool) {
 	// myOldRootNext := atomic.Loadint32(&work.myMarkrootNext[myId])
 	newRootNext := int32(atomic.Load(&work.markrootNext))
 	atomic.Storeint32(&work.myMarkrootNext[myId], newRootNext)
-	if gcddtrace(1) {
-		println("\t\t(", myId, ")==============================================\n"+
-			"\t\t[ vIndex:", vIndex, "] [ Base stacks:", int32(work.baseStacks), "] [ ivIndex:", ivIndex, "]\n"+
-			"\t\t[ oldRootJobs:", oldRootJobs, "] [ newRootJobs:", newRootJobs, "] [ newRootNext", newRootNext, "]\n"+
-			"\t\t[ work.nValidStackRoots", work.nValidStackRoots, "] [ work.nStackRoots", work.nStackRoots, "] [ len(work.stackRoots)", len(work.stackRoots), "] \n"+
-			"\t\t==============================================")
-	}
-
 	// markrootJobs and myMarkrootNext can only change while holding a lock
 	// a worker can only be working on a root with index larger than its copy of
 	// myMarkrootNext
@@ -1206,9 +1194,8 @@ func detectPartialDeadlocks() {
 	if debug.gcdetectdeadlocks == 0 {
 		return
 	}
-	// ANGE XXX: end of sanity check
 
-	// report deadlock, mark them unreachable, and resume marking
+	// Report deadlocks and mark them unreachable, and resume marking
 	// we still need to mark these unreachable *g structs as they
 	// get reused, but their stack won't get scanned
 	if work.nValidStackRoots == work.nStackRoots {
@@ -1218,38 +1205,11 @@ func detectPartialDeadlocks() {
 
 	if gcddtrace(1) || gcddtrace(2) {
 		println("≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠\n"+
-			"[[[[[[[[[[[[[[[[ GC:", work.cycles.Load(), ":: DETECT DEADLOCKS ]]]]]]]]]]]]]]]]\n"+
+			"[[[[[[[[[[[[[[[[ GC:", work.cycles.Load(), ":: III. DETECT DEADLOCKS ]]]]]]]]]]]]]]]]\n"+
 			"≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠")
 	}
 
 	lock(&work.stackRootsLock)
-	// ANGE XXX: sanity check
-	for i := 0; i < work.nValidStackRoots; i++ {
-		var gp *g = (*g)(work.stackRoots[i])
-		if gc_ptr_is_masked(unsafe.Pointer(gp)) {
-			throw("Stack root is masked and shouldn't be.")
-		}
-		fn := findfunc(gp.startpc)
-		if fn.valid() && funcname(fn) != "runtime.main" && !gp.gcscandone {
-			if debug.gcddtrace != 0 {
-				println("\t\t\t===================================\n" +
-					"\t\t\t[[[[ FOUND UNSCANNED GOROUTINE ]]]]\n" +
-					"\t\t\t===================================\n" +
-					fullGoroutineReport(gp))
-			}
-			throw("Stack root is not scanned.")
-		}
-	}
-	for i := work.nValidStackRoots; i < work.nStackRoots; i++ {
-		var p unsafe.Pointer = work.stackRoots[i]
-		var gp *g = (*g)(gc_undo_mask_ptr(work.stackRoots[i]))
-		if gc_ptr_is_masked(p) == false {
-			throw("Stack root is NOT masked and should be.")
-		}
-		if gp.gcscandone == true {
-			throw("Invalid stack root is scanned.")
-		}
-	}
 
 	// Try to reach another fix point here. Keep scouting for runnable goroutines until
 	// none are left.
@@ -1612,9 +1572,6 @@ func gcBgMarkStartWorkers() {
 	//
 	// Worker Gs don't exit if gomaxprocs is reduced. If it is raised
 	// again, we can reuse the old workers; no need to create new workers.
-	if gcddtrace(1) {
-		println("\t[[[ creating ", gomaxprocs, " number of gcBg worker ]]]")
-	}
 	if gcBgMarkWorkerCount >= gomaxprocs {
 		return
 	}
@@ -1630,11 +1587,6 @@ func gcBgMarkStartWorkers() {
 	ready := make(chan struct{}, 1)
 	releasem(mp)
 
-	if gcddtrace(1) || gcddtrace(2) {
-		println("≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠\n"+
-			"[[[[[[[[[[[[[[[[ GC:", work.cycles.Load(), "; 0. KICK-START GC WORKERS ]]]]]]]]]]]]]]]]\n"+
-			"≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠")
-	}
 	for gcBgMarkWorkerCount < gomaxprocs {
 		mp := acquirem() // See above, we allocate a closure here.
 		go gcBgMarkWorker(ready)
@@ -1658,11 +1610,6 @@ func gcBgMarkStartWorkers() {
 // gcBgMarkPrepare sets up state for background marking.
 // Mutator assists must not yet be enabled.
 func gcBgMarkPrepare() {
-	if gcddtrace(1) {
-		println("≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠\n"+
-			"[[[[[[[[[[[[[[[[ GC:", work.cycles.Load(), ":: II. BACKGROUND MARK PREPARE ]]]]]]]]]]]]]]]]\n"+
-			"≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠")
-	}
 	// Background marking will stop when the work queues are empty
 	// and there are no more workers (note that, since this is
 	// concurrent, this may be a transient state, but mark
@@ -1855,6 +1802,8 @@ func gcBgMarkWorker(ready chan struct{}) {
 			println("runtime: work.nwait=", decnwait, "work.nproc=", work.nproc)
 			throw("work.nwait was > work.nproc")
 		}
+
+		var moreRoots, isLast bool
 		if !detectDeadlocks {
 			// regular GC; one phase suffice
 			gcOneMarkPhase(gp, pp)
@@ -1871,10 +1820,11 @@ func gcBgMarkWorker(ready chan struct{}) {
 			noteclear(myNote)
 			for {
 				gcOneMarkPhase(gp, pp)
-				moreRoots, isLast := gcDiscoverMoreStackRoots(myId)
-
-				if gcMarkWorkAvailable(nil) {
-					continue
+				moreRoots, isLast = gcDiscoverMoreStackRoots(myId)
+				if pp.gcMarkWorkerMode == gcMarkWorkerIdleMode {
+					// If we are running in idle mode, bail early.
+					atomic.Storeint32(&work.myMarkrootNext[myId], -1)
+					break
 				}
 
 				if !isLast {
@@ -1882,6 +1832,12 @@ func gcBgMarkWorker(ready chan struct{}) {
 						notetsleep(myNote, 1000000)
 						noteclear(myNote)
 					})
+					// If we are running in fractional mode, bail early so we can advance
+					// the fractional mark time.
+					if pp.gcMarkWorkerMode == gcMarkWorkerFractionalMode {
+						atomic.Storeint32(&work.myMarkrootNext[myId], -1)
+						break
+					}
 					continue
 				}
 
