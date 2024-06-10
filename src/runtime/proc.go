@@ -1068,6 +1068,7 @@ func casfrom_Gscanstatus(gp *g, oldval, newval uint32) {
 		_Gscanwaiting,
 		_Gscanrunning,
 		_Gscansyscall,
+		_Gscandeadlocked,
 		_Gscanpreempted:
 		if newval == oldval&^_Gscan {
 			success = gp.atomicstatus.CompareAndSwap(oldval, newval)
@@ -1088,6 +1089,7 @@ func castogscanstatus(gp *g, oldval, newval uint32) bool {
 	case _Grunnable,
 		_Grunning,
 		_Gwaiting,
+		_Gdeadlocked,
 		_Gsyscall:
 		if newval == oldval|_Gscan {
 			r := gp.atomicstatus.CompareAndSwap(oldval, newval)

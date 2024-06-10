@@ -163,7 +163,7 @@ func suspendG(gp *g, pd bool) suspendGState {
 			s = _Gwaiting
 			fallthrough
 
-		case _Grunnable, _Gsyscall, _Gwaiting:
+		case _Grunnable, _Gsyscall, _Gwaiting, _Gdeadlocked:
 			// Claim goroutine by setting scan bit.
 			// This may race with execution or readying of gp.
 			// The scan bit keeps it from transition state.
@@ -272,7 +272,8 @@ func resumeG(state suspendGState) {
 
 	case _Grunnable | _Gscan,
 		_Gwaiting | _Gscan,
-		_Gsyscall | _Gscan:
+		_Gsyscall | _Gscan,
+		_Gdeadlocked | _Gscan:
 		casfrom_Gscanstatus(gp, s, s&^_Gscan)
 	}
 
