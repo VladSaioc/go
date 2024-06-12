@@ -451,15 +451,18 @@ func gc_goexit0(gp *g) {
 		releaseSudog(s) // return sudog to the cache
 	}
 
+	// Make sure we properly blank slate the G of a deadlocked goroutine.
 	gp.lockedm = 0
 	gp.gcscandone = false
+	gp.preempt = false
 	gp.preemptStop = false
 	gp.paniconfault = false
 	gp.waitreason = waitReasonZero
 	gp.asyncSafePoint = false
-	gp.activeStackChans = false // Make sure we properly blank slate a deadlocked goroutine.
-	gp._defer = nil             // should be true already but just in case.
-	gp._panic = nil             // non-nil for Goexit during panic. points at stack-allocated data.
+	gp.parkingOnChan.Store(false)
+	gp.activeStackChans = false
+	gp._defer = nil // should be true already but just in case.
+	gp._panic = nil // non-nil for Goexit during panic. points at stack-allocated data.
 	gp.writebuf = nil
 	gp.waiting_sema = nil
 	gp.waiting_notifier = nil

@@ -1102,7 +1102,7 @@ func gcDiscoverMoreStackRoots(myId uint32) (bool, bool) {
 		println("\t≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠\n"+
 			"\t[[[[[[[[[ (", myId, ") DISCOVERING MORE STACK ROOTS ]]]]]]]]]\n"+
 			"\t≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠\n"+
-			"\t\t[ vIndex:", vIndex, "] [ ivIndex:", ivIndex, "] [ work.markrootJob:", int32(atomic.Load(&work.markrootJobs)), "]\n"+
+			"\t\t[ vIndex:", vIndex, "] [ ivIndex:", ivIndex, "] [ job:", int32(atomic.Load(&work.markrootJobs)), "]\n"+
 			"\t\t~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
 	}
 
@@ -1830,6 +1830,10 @@ func gcBgMarkWorker(ready chan struct{}) {
 				moreRoots, isLast = gcDiscoverMoreStackRoots(myId)
 				if pp.gcMarkWorkerMode == gcMarkWorkerIdleMode {
 					// If we are running in idle mode, bail early.
+					systemstack(func() {
+						notetsleep(myNote, 1000000)
+						noteclear(myNote)
+					})
 					atomic.Storeint32(&work.myMarkrootNext[myId], -1)
 					break
 				}
