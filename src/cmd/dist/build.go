@@ -391,6 +391,9 @@ func findgoversion() string {
 					if err != nil {
 						fatalf("VERSION: bad time: %s", err)
 					}
+				case "//":
+					// FIXME: Remove this
+					continue
 				}
 			}
 		}

@@ -1527,10 +1527,10 @@ func gcMarkTermination(stw worldStop) {
 			print(string(fmtNSAsMS(sbuf[:], uint64(ns))))
 		}
 		print(" ms cpu, ",
-			work.heap0>>20, "->", work.heap1>>20, "->", work.heap2>>20, " MB, ",
-			gcController.lastHeapGoal>>20, " MB goal, ",
-			gcController.lastStackScan.Load()>>20, " MB stacks, ",
-			gcController.globalsScan.Load()>>20, " MB globals, ",
+			work.heap0>>7, "->", work.heap1>>7, "->", work.heap2>>7, " Kb, ",
+			gcController.lastHeapGoal>>7, " Kb goal, ",
+			gcController.lastStackScan.Load()>>7, " Kb stacks, ",
+			gcController.globalsScan.Load()>>7, " Kb globals, ",
 			work.maxprocs, " P")
 		if work.userForced {
 			print(" (forced)")
