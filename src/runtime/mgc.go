@@ -1249,12 +1249,19 @@ func detectPartialDeadlocks() {
 		casgstatus(gp, _Gwaiting, _Gunreachable)
 		fn := findfunc(gp.startpc)
 		if fn.valid() {
-			print("partial deadlock! goroutine ", gp.goid, ": ", funcname(fn), "\n")
+			print("partial deadlock! goroutine ", gp.goid, ": ", funcname(fn))
 		} else {
-			print("partial deadlock! goroutine ", gp.goid, ": !unnamed goroutine!", "\n")
+			print("partial deadlock! goroutine ", gp.goid, ": !unnamed goroutine!")
 		}
-		traceback(gp.sched.pc, gp.sched.sp, gp.sched.lr, gp)
-		println()
+		if gcddtrace(3) {
+			print(":::")
+			tracebackline(gp.sched.pc, gp.sched.sp, gp.sched.lr, gp)
+			print("\n")
+		} else {
+			print("\n")
+			traceback(gp.sched.pc, gp.sched.sp, gp.sched.lr, gp)
+			println()
+		}
 		work.stackRoots[i] = unsafe.Pointer(gp)
 	}
 	// Put the remaining roots as ready for marking and drain them.
