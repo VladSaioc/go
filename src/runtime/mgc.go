@@ -1247,7 +1247,7 @@ func detectPartialDeadlocks() {
 			print("partial deadlock! goroutine ", gp.goid, ": !unnamed goroutine!")
 		}
 		if gcddtrace(3) {
-			print(":::")
+			print("::")
 			tracebackline(gp.sched.pc, gp.sched.sp, gp.sched.lr, gp)
 			print("\n")
 		} else {
