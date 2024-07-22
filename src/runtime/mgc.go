@@ -347,10 +347,6 @@ type workType struct {
 	tstart int64
 	nwait  uint32
 
-	// ANGE XXX: the next three fields are used only when we perform the deadlock detection
-	ngcBgMarkWorker uint32 // ANGE XXX: number of gcBgMarkWorker participated in a GC cycle
-	gcMarkPhases    []note // ANGE XXX: to coordinate workers between mark phases
-
 	// during normal GC cycle, nStackRoots == nValidStackRoots == len(stackRoots)
 	// during deadlock detection GC, nValidStackRoots is the number of stackRoots
 	// to examine, and nStackRoots == len(stackRoots), which include goroutines that are
@@ -359,13 +355,6 @@ type workType struct {
 
 	// Base indexes of each root type. Set by gcMarkRootPrepare.
 	baseData, baseBSS, baseSpans, baseStacks, baseEnd uint32
-
-	// ANGE XXX: the snapshot of the markrootJobs that a gc background worker completed;
-	// this is used only when we run the deadlock detection in GC.
-	// the snapshot is used to coordinate among gc background workers and figure out
-	// which worker is the last to complete a particular marking phase.
-	// initialized to all 0s before the marking phase begins
-	myMarkrootNext []int32
 
 	// ANGE XXX: lock for updating the content and indices pointing to stackRoots
 	stackRootsLock mutex
@@ -1086,10 +1075,7 @@ func stackRootValid(gp *g) bool {
 // Check to see if more blocked but marked goroutines exist;
 // if so add them into root set and increment work.markrootJobs accordingly
 // return true if we need to run another phase of markroots; return false otherwise
-func gcDiscoverMoreStackRoots(myId uint32) (bool, bool) {
-
-	var moreRoots, isLast bool = false, true
-
+func gcDiscoverMoreStackRoots() {
 	lock(&work.stackRootsLock)
 
 	// to begin with we have a set of unchecked stackRoots between
@@ -1100,7 +1086,7 @@ func gcDiscoverMoreStackRoots(myId uint32) (bool, bool) {
 
 	if gcddtrace(2) {
 		println("\t≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠\n"+
-			"\t[[[[[[[[[ (", myId, ") DISCOVERING MORE STACK ROOTS ]]]]]]]]]\n"+
+			"\t[[[[[[[[[ DISCOVERING MORE STACK ROOTS ]]]]]]]]]\n"+
 			"\t≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠\n"+
 			"\t\t[ vIndex:", vIndex, "] [ ivIndex:", ivIndex, "] [ next:", int32(atomic.Load(&work.markrootNext)), "] [ job:", int32(atomic.Load(&work.markrootJobs)), "]\n"+
 			"\t\t~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
@@ -1121,9 +1107,6 @@ func gcDiscoverMoreStackRoots(myId uint32) (bool, bool) {
 				}
 				swapGp := gc_undo_mask_ptr(work.stackRoots[ivIndex])
 				if stackRootValid((*g)(swapGp)) {
-					if gcddtrace(1) {
-						println("\t\t>>> (", myId, ") Swapped runnable goroutine", ivIndex, "(", swapGp, ") with blocked goroutine", vIndex, "(", unsafe.Pointer(gp), ")")
-					}
 					work.stackRoots[ivIndex] = p
 					work.stackRoots[vIndex] = swapGp
 					vIndex = vIndex + 1
@@ -1136,15 +1119,6 @@ func gcDiscoverMoreStackRoots(myId uint32) (bool, bool) {
 	var oldRootJobs int32 = int32(atomic.Load(&work.markrootJobs))
 	var newRootJobs int32 = int32(work.baseStacks) + int32(vIndex)
 
-	if gcddtrace(1) {
-		println("\t\t(", myId, ")====================================\n"+
-			"\t\tGOROUTINE REORDERING DONE\n"+
-			"\t\t[ vIndex:", vIndex, "] [ Base stacks:", int32(work.baseStacks), "] [ ivIndex:", ivIndex, "]\n"+
-			"\t\t[ oldRootJobs:", oldRootJobs, "] [ newRootJobs:", newRootJobs, "]\n"+
-			"\t\t[ work.nValidStackRoots", work.nValidStackRoots, "]\n"+
-			"\t\t==================================== ")
-	}
-
 	if oldRootJobs > newRootJobs {
 		throw("oldRootJobs > newRootJobs!")
 	}
@@ -1156,31 +1130,8 @@ func gcDiscoverMoreStackRoots(myId uint32) (bool, bool) {
 		// reset markrootNext as it could have been incremented past markrootJobs
 		work.nValidStackRoots = vIndex
 		atomic.Store(&work.markrootJobs, uint32(newRootJobs))
-		moreRoots = true
-	}
-	// update myMarkrootNext for this worker
-	newRootNext := int32(atomic.Load(&work.markrootNext))
-	atomic.Storeint32(&work.myMarkrootNext[myId], newRootNext)
-	// markrootJobs and myMarkrootNext can only change while holding a lock
-	// a worker can only be working on a root with index larger than its copy of
-	// myMarkrootNext
-	for i := 0; i < len(work.myMarkrootNext); i++ {
-		otherRootNext := atomic.Loadint32(&work.myMarkrootNext[i])
-		// some worker may show up really late or never join for this GC cycle.
-		// those would have a otherRootJobs value of 0; if our value is also 0,
-		// we will have a smaller myId than that worker; if our value is > 0,
-		// we can go ahead and ignore that worker
-		if otherRootNext == -1 {
-			continue
-		}
-		if otherRootNext < newRootJobs {
-			isLast = false
-			break
-		}
 	}
 	unlock(&work.stackRootsLock)
-
-	return moreRoots, isLast
 }
 
 func detectPartialDeadlocks() {
@@ -1623,22 +1574,6 @@ func gcBgMarkPrepare() {
 	work.nproc = ^uint32(0)
 	work.nwait = ^uint32(0)
 	// work.ngcBgMarkWorker = uint32(0)
-
-	if len(work.gcMarkPhases) == 0 || len(work.gcMarkPhases) < int(gomaxprocs) {
-		work.gcMarkPhases = make([]note, gomaxprocs)
-		// just need to do this once; the gcBgMarkWorker will call
-		// noteclear for subsequent GC cycles
-		for i := range work.gcMarkPhases {
-			noteclear(&work.gcMarkPhases[i])
-		}
-	}
-	if len(work.myMarkrootNext) == 0 || len(work.myMarkrootNext) < int(gomaxprocs) {
-		work.myMarkrootNext = make([]int32, gomaxprocs)
-	}
-	// zero out the myMarkrootNext for every GC cycle
-	for i, _ := range work.myMarkrootNext {
-		work.myMarkrootNext[i] = -1
-	}
 }
 
 // gcBgMarkWorkerNode is an entry in the gcBgMarkWorkerPool. It points to a single
@@ -1656,57 +1591,9 @@ type gcBgMarkWorkerNode struct {
 	m muintptr
 }
 
-// ANGE XXX: added new function
-// This function performs one phase of parallel marking and is invoked by
-// the gcBgMarkWorker goroutine. A worker decrements work.nwait upon entry and
-// increments work.nwait upon exit; the last worker that increments the work.nwait
-// to equal work.nproc returns true to indicate that it is the last worker leaving
-// this mark phase.
-func gcOneMarkPhase(gp *g, pp *p) {
-	systemstack(func() {
-		// the G stack. However, stack shrinking i
-
-		// Mark our goroutine preemptible so its stack
-		// can be scanned. This lets two mark workers
-		// scan each other (otherwise, they would
-		// deadlock). We must not modify anything on
-		// the G stack. However, stack shrinking is
-		// disabled for mark workers, so it is safe to
-		// read from the G stack.
-		casgstatus(gp, _Grunning, _Gwaiting)
-		switch pp.gcMarkWorkerMode {
-		default:
-			throw("gcBgMarkWorker: unexpected gcMarkWorkerMode")
-		case gcMarkWorkerDedicatedMode:
-			gcDrainMarkWorkerDedicated(&pp.gcw, true)
-			if gp.preempt {
-				// We were preempted. This is
-				// a useful signal to kick
-				// everything out of the run
-				// queue so it can run
-				// somewhere else.
-				if drainQ, n := runqdrain(pp); n > 0 {
-					lock(&sched.lock)
-					globrunqputbatch(&drainQ, int32(n))
-					unlock(&sched.lock)
-				}
-			}
-			// Go back to draining, this time
-			// without preemption.
-			gcDrainMarkWorkerDedicated(&pp.gcw, false)
-		case gcMarkWorkerFractionalMode:
-			gcDrainMarkWorkerFractional(&pp.gcw)
-		case gcMarkWorkerIdleMode:
-			gcDrainMarkWorkerIdle(&pp.gcw)
-		}
-		casgstatus(gp, _Gwaiting, _Grunning)
-	})
-}
-
 func gcBgMarkWorker(ready chan struct{}) {
 	detectDeadlocks := debug.gcdetectdeadlocks > 0
 	gp := getg()
-	myId := atomic.Xadd(&work.ngcBgMarkWorker, 1) - 1 // fixed for the entire process
 
 	// We pass node to a gopark unlock function, so it can't be on
 	// the stack (see gopark). Prevent deadlock from recursively
@@ -1778,10 +1665,6 @@ func gcBgMarkWorker(ready chan struct{}) {
 		node.m.set(acquirem())
 		pp := gp.m.p.ptr() // P can't change with preemption disabled.
 
-		lock(&work.stackRootsLock)
-		atomic.Storeint32(&work.myMarkrootNext[myId], 0)
-		unlock(&work.stackRootsLock)
-
 		if gcBlackenEnabled == 0 {
 			println("worker mode", pp.gcMarkWorkerMode)
 			throw("gcBgMarkWorker: blackening not enabled")
@@ -1804,52 +1687,46 @@ func gcBgMarkWorker(ready chan struct{}) {
 			throw("work.nwait was > work.nproc")
 		}
 
-		var moreRoots, isLast bool
-		if !detectDeadlocks {
-			// regular GC; one phase suffice
-			gcOneMarkPhase(gp, pp)
-		} else {
-			// special GC run that performs deadlock detection
-			myNote := &work.gcMarkPhases[myId]
-			noteclear(myNote)
-			for {
-				gcOneMarkPhase(gp, pp)
-				moreRoots, isLast = gcDiscoverMoreStackRoots(myId)
-				if pp.gcMarkWorkerMode == gcMarkWorkerIdleMode {
-					// If we are running in idle mode, bail early.
-					systemstack(func() {
-						notetsleep(myNote, 1000000)
-						noteclear(myNote)
-					})
-					atomic.Storeint32(&work.myMarkrootNext[myId], -1)
-					break
-				}
+		systemstack(func() {
+			// the G stack. However, stack shrinking i
 
-				if !isLast {
-					systemstack(func() {
-						notetsleep(myNote, 1000000)
-						noteclear(myNote)
-					})
-					// If we are running in fractional mode, bail early so we can advance
-					// the fractional mark time.
-					if pp.gcMarkWorkerMode == gcMarkWorkerFractionalMode {
-						atomic.Storeint32(&work.myMarkrootNext[myId], -1)
-						break
+			// Mark our goroutine preemptible so its stack
+			// can be scanned. This lets two mark workers
+			// scan each other (otherwise, they would
+			// deadlock). We must not modify anything on
+			// the G stack. However, stack shrinking is
+			// disabled for mark workers, so it is safe to
+			// read from the G stack.
+			casgstatus(gp, _Grunning, _Gwaiting)
+			switch pp.gcMarkWorkerMode {
+			default:
+				throw("gcBgMarkWorker: unexpected gcMarkWorkerMode")
+			case gcMarkWorkerDedicatedMode:
+				gcDrainMarkWorkerDedicated(&pp.gcw, true)
+				if gp.preempt {
+					// We were preempted. This is
+					// a useful signal to kick
+					// everything out of the run
+					// queue so it can run
+					// somewhere else.
+					if drainQ, n := runqdrain(pp); n > 0 {
+						lock(&sched.lock)
+						globrunqputbatch(&drainQ, int32(n))
+						unlock(&sched.lock)
 					}
-					continue
 				}
-
-				if !moreRoots {
-					// this is the last worker AND it didn't generate new work
-					// note that the last worker may have generated more work, but gcMarkWorkAvailable
-					// still return false, because between the time work is generated and the call
-					// to gcMarkWorkAvailable, the jobs generated may have been claimed by other
-					// workers.  In that case, the last worker still need to call gcDiscoverMoreRoots
-					// one last time to update its snapshot of myMarkrootNext instead of breaking out
-					atomic.Storeint32(&work.myMarkrootNext[myId], -1)
-					break
-				}
+				// Go back to draining, this time
+				// without preemption.
+				gcDrainMarkWorkerDedicated(&pp.gcw, false)
+			case gcMarkWorkerFractionalMode:
+				gcDrainMarkWorkerFractional(&pp.gcw)
+			case gcMarkWorkerIdleMode:
+				gcDrainMarkWorkerIdle(&pp.gcw)
 			}
+			casgstatus(gp, _Gwaiting, _Grunning)
+		})
+		if detectDeadlocks {
+			gcDiscoverMoreStackRoots()
 		}
 
 		// Account for time and mark us as stopped.
