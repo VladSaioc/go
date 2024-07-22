@@ -1102,7 +1102,7 @@ func gcDiscoverMoreStackRoots(myId uint32) (bool, bool) {
 		println("\t≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠\n"+
 			"\t[[[[[[[[[ (", myId, ") DISCOVERING MORE STACK ROOTS ]]]]]]]]]\n"+
 			"\t≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠\n"+
-			"\t\t[ vIndex:", vIndex, "] [ ivIndex:", ivIndex, "] [ job:", int32(atomic.Load(&work.markrootJobs)), "]\n"+
+			"\t\t[ vIndex:", vIndex, "] [ ivIndex:", ivIndex, "] [ next:", int32(atomic.Load(&work.markrootNext)), "] [ job:", int32(atomic.Load(&work.markrootJobs)), "]\n"+
 			"\t\t~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
 	}
 
@@ -1159,18 +1159,11 @@ func gcDiscoverMoreStackRoots(myId uint32) (bool, bool) {
 		moreRoots = true
 	}
 	// update myMarkrootNext for this worker
-	// myOldRootNext := atomic.Loadint32(&work.myMarkrootNext[myId])
 	newRootNext := int32(atomic.Load(&work.markrootNext))
 	atomic.Storeint32(&work.myMarkrootNext[myId], newRootNext)
 	// markrootJobs and myMarkrootNext can only change while holding a lock
 	// a worker can only be working on a root with index larger than its copy of
 	// myMarkrootNext
-	if len(work.myMarkrootNext) < int(gomaxprocs) {
-		if debug.gcddtrace != 0 {
-			println("XXX len ", len(work.myMarkrootNext), "gomaxprocs ", gomaxprocs)
-		}
-		throw("len of myMarkRootNext < gomaxprocs")
-	}
 	for i := 0; i < len(work.myMarkrootNext); i++ {
 		otherRootNext := atomic.Loadint32(&work.myMarkrootNext[i])
 		// some worker may show up really late or never join for this GC cycle.
@@ -1824,13 +1817,6 @@ func gcBgMarkWorker(ready chan struct{}) {
 		} else {
 			// special GC run that performs deadlock detection
 			myNote := &work.gcMarkPhases[myId]
-
-			if int(myId) > len(work.gcMarkPhases) {
-				throw("myId out of array bound of gcMarkPhases")
-			}
-			if len(work.gcMarkPhases) < int(gomaxprocs) {
-				throw("len of gcMarkPhases < gomaxprocs")
-			}
 			noteclear(myNote)
 			for {
 				gcOneMarkPhase(gp, pp)

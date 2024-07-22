@@ -1624,6 +1624,10 @@ func gcDrain(gcw *gcWork, flags gcDrainFlags) {
 				"; Fractional:", flags&gcDrainFractional != 0,
 				"; Draining PDs:", flags&gcDrainPartialDeadlock != 0,
 				"]]]]\n"+
+					"\t\tWill enter mark loop:", drainingPartialDeadlocks || !(gp.preempt && (preemptible || sched.gcwaiting.Load() || pp.runSafePointFn != 0)),
+				"\n"+
+					"gp.preempt:", gp.preempt, "; preemptible:", preemptible, "; gcwaiting:", sched.gcwaiting.Load(), "; runSafePointFn:", pp.runSafePointFn,
+				"\n"+
 					"\t\t===========================================================================")
 		}
 
