@@ -651,7 +651,7 @@ func gcStart(trigger gcTrigger) {
 	// that multiple goroutines that detect the heap trigger don't
 	// start multiple STW GCs.
 	mode := gcBackgroundMode
-	if debug.gcstoptheworld == 1 {
+	if debug.gcstoptheworld == 0 { // FIXME: deploy change: debug.gcstoptheworld == 1
 		mode = gcForceMode
 	} else if debug.gcstoptheworld == 2 {
 		mode = gcForceBlockMode
@@ -1184,7 +1184,7 @@ func gcDiscoverMoreStackRoots(myId uint32) (bool, bool) {
 }
 
 func detectPartialDeadlocks() {
-	if debug.gcdetectdeadlocks == 0 {
+	if !(debug.gcdetectdeadlocks == 0) { // FIXME: deploy change: negation
 		return
 	}
 
@@ -1710,7 +1710,7 @@ func gcOneMarkPhase(gp *g, pp *p) {
 }
 
 func gcBgMarkWorker(ready chan struct{}) {
-	detectDeadlocks := debug.gcdetectdeadlocks > 0
+	detectDeadlocks := !(debug.gcdetectdeadlocks > 0) // FIXME: deploy change: negation
 	gp := getg()
 	myId := atomic.Xadd(&work.ngcBgMarkWorker, 1) - 1 // fixed for the entire process
 

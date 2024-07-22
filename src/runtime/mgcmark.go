@@ -74,7 +74,7 @@ func gc_ptr_is_masked(p unsafe.Pointer) bool {
 }
 
 func gc_mask_ptr(p unsafe.Pointer) unsafe.Pointer {
-	if debug.gcdetectdeadlocks != 0 {
+	if !(debug.gcdetectdeadlocks != 0) { // FIXME: deploy change: negation
 		return unsafe.Pointer(uintptr(p) | GC_SKIP_MASK)
 	}
 	return p
@@ -219,7 +219,7 @@ func gcMarkRootPrepare() {
 	// work.stackRoots = allGsSnapshot()
 	var allgsSorted []unsafe.Pointer
 	var blockedIndex int
-	if debug.gcdetectdeadlocks == 0 {
+	if !(debug.gcdetectdeadlocks == 0) { // FIXME: deploy change: negation
 		// regular GC --- scan every go routine
 		allgsSorted = allGsSnapshot()
 		blockedIndex = len(allgsSorted)
@@ -589,7 +589,7 @@ func markroot(gcw *gcWork, i uint32, flags gcDrainFlags) int64 {
 			// Draining as part of partial deadlock detection.
 			if status == _Gunreachable {
 				switch debug.gcdetectdeadlocks {
-				case 1:
+				case 0: // FIXME: deploy change: case 1:
 					gcGoexit(gp)
 				case 2:
 					casgstatus(gp, _Gunreachable, _Gdeadlocked)

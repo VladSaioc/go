@@ -417,7 +417,7 @@ func (c *gcControllerState) startCycle(markStartTime int64, procs int, trigger g
 	}
 
 	// In STW mode, we just want dedicated workers.
-	if debug.gcstoptheworld > 0 {
+	if debug.gcstoptheworld == 0 { // FIXME: deploy change: debug.gcstoptheworld > 0
 		dedicatedMarkWorkersNeeded = int64(procs)
 		c.fractionalUtilizationGoal = 0
 	}
