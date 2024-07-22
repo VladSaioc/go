@@ -70,6 +70,9 @@ const (
 	// should resume tracing at the user stack when the system stack is
 	// exhausted.
 	unwindJumpStack
+
+	// unwindAsLine indicates that the traceback is to be unwound as a single line.
+	unwindAsLine
 )
 
 // An unwinder iterates the physical stack frames of a Go sack.
@@ -767,22 +770,26 @@ func printFuncName(name string) {
 	print(a, b, c)
 }
 
-func printcreatedby(gp *g) {
+func printcreatedby(gp *g, flags unwindFlags) {
 	// Show what created goroutine, except main goroutine (goid 1).
 	pc := gp.gopc
 	f := findfunc(pc)
 	if f.valid() && showframe(f.srcFunc(), gp, false, abi.FuncIDNormal) && gp.goid != 1 {
-		printcreatedby1(f, pc, gp.parentGoid)
+		printcreatedby1(f, pc, gp.parentGoid, flags)
 	}
 }
 
-func printcreatedby1(f funcInfo, pc uintptr, goid uint64) {
+func printcreatedby1(f funcInfo, pc uintptr, goid uint64, flags unwindFlags) {
 	print("created by ")
 	printFuncName(funcname(f))
 	if goid != 0 {
 		print(" in goroutine ", goid)
 	}
-	print("\n")
+	if flags&unwindAsLine != 0 {
+		print("::")
+	} else {
+		print("\n")
+	}
 	tracepc := pc // back up to CALL instruction for funcline.
 	if pc > f.entry() {
 		tracepc -= sys.PCQuantum
@@ -792,11 +799,19 @@ func printcreatedby1(f funcInfo, pc uintptr, goid uint64) {
 	if pc > f.entry() {
 		print(" +", hex(pc-f.entry()))
 	}
-	print("\n")
+	if flags&unwindAsLine != 0 {
+		print("::")
+	} else {
+		print("\n")
+	}
 }
 
 func traceback(pc, sp, lr uintptr, gp *g) {
 	traceback1(pc, sp, lr, gp, 1)
+}
+
+func tracebackline(pc, sp, lr uintptr, gp *g) {
+	traceback1(pc, sp, lr, gp, unwindPrintErrors|unwindAsLine)
 }
 
 // tracebacktrap is like traceback but expects that the PC and SP were obtained
@@ -922,7 +937,7 @@ func traceback1(pc, sp, lr uintptr, gp *g, flags unwindFlags) {
 	if tracebackWithRuntime(false) == 0 {
 		tracebackWithRuntime(true)
 	}
-	printcreatedby(gp)
+	printcreatedby(gp, flags)
 
 	if gp.ancestors == nil {
 		return
@@ -991,7 +1006,11 @@ func traceback2(u *unwinder, showRuntime bool, skip, max int, flags unwindFlags)
 				argp := unsafe.Pointer(u.frame.argp)
 				printArgs(f, argp, u.symPC())
 			}
-			print(")\n")
+			if flags&unwindAsLine != 0 {
+				print(")::")
+			} else {
+				print(")\n")
+			}
 			print("\t", file, ":", line)
 			// The contract between Callers and CallersFrames uses
 			// return addresses, which are +1 relative to the CALL
@@ -1013,7 +1032,11 @@ func traceback2(u *unwinder, showRuntime bool, skip, max int, flags unwindFlags)
 					print(" pc=", hex(pc))
 				}
 			}
-			print("\n")
+			if flags&unwindAsLine != 0 {
+				print("::")
+			} else {
+				print("\n")
+			}
 		}
 
 		// Print cgo frames.
@@ -1053,7 +1076,11 @@ func traceback2(u *unwinder, showRuntime bool, skip, max int, flags unwindFlags)
 // TODO: Unify this with gentraceback and CallersFrames.
 func printAncestorTraceback(ancestor ancestorInfo, flags unwindFlags) {
 	print("[originating from goroutine ", ancestor.goid, "]:")
-	print("\n")
+	if flags&unwindAsLine != 0 {
+		print("::")
+	} else {
+		print("\n")
+	}
 	for fidx, pc := range ancestor.pcs {
 		f := findfunc(pc) // f previously validated
 		if showfuncinfo(f.srcFunc(), fidx == 0, abi.FuncIDNormal) {
@@ -1068,7 +1095,7 @@ func printAncestorTraceback(ancestor ancestorInfo, flags unwindFlags) {
 	if f.valid() && showfuncinfo(f.srcFunc(), false, abi.FuncIDNormal) && ancestor.goid != 1 {
 		// In ancestor mode, we'll already print the goroutine ancestor.
 		// Pass 0 for the goid parameter so we don't print it again.
-		printcreatedby1(f, ancestor.gopc, 0)
+		printcreatedby1(f, ancestor.gopc, 0, flags)
 	}
 }
 
@@ -1273,7 +1300,7 @@ func tracebackothers(me *g) {
 		// print its stack.
 		if gp.m != getg().m && readgstatus(gp)&^_Gscan == _Grunning {
 			print("\tgoroutine running on other thread; stack unavailable\n")
-			printcreatedby(gp)
+			printcreatedby(gp, 0)
 		} else {
 			traceback(^uintptr(0), ^uintptr(0), 0, gp)
 		}
