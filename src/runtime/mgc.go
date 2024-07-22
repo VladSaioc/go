@@ -1246,15 +1246,9 @@ func detectPartialDeadlocks() {
 		} else {
 			print("partial deadlock! goroutine ", gp.goid, ": !unnamed goroutine!")
 		}
-		if gcddtrace(3) {
-			print("::")
-			tracebackline(gp.sched.pc, gp.sched.sp, gp.sched.lr, gp)
-			print("\n")
-		} else {
-			print("\n")
-			traceback(gp.sched.pc, gp.sched.sp, gp.sched.lr, gp)
-			println()
-		}
+		print("\n")
+		traceback(gp.sched.pc, gp.sched.sp, gp.sched.lr, gp)
+		println()
 		work.stackRoots[i] = unsafe.Pointer(gp)
 	}
 	// Put the remaining roots as ready for marking and drain them.
