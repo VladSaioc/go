@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # Create distribution directory
-rm -rf packs
-mkdir packs
+rm -rf "$(dirname $(dirname $(realpath $0)))/dist-packs"
+mkdir "$(dirname $(dirname $(realpath $0)))/dist-packs"
 VERSION="go1.23.42"
 
 # Write spoofed version to VERSION file
@@ -21,7 +21,7 @@ pack() {
 
     local hash=$(md5sum "pkg/distpack/$VERSION.$goos-$goarch.tar.gz" | cut -c1-12)
 
-    cp "pkg/distpack/$VERSION.$goos-$goarch.tar.gz" "packs/$VERSION.$goos-$goarch.$hash.tar.gz"
+    cp "pkg/distpack/$VERSION.$goos-$goarch.tar.gz" "$(dirname $(dirname $(realpath $0)))/dist-packs/$VERSION.$goos-$goarch.$hash.tar.gz"
 }
 
 pack linux amd64
