@@ -1133,7 +1133,7 @@ func gcDiscoverMoreStackRoots() {
 }
 
 func detectPartialDeadlocks() {
-	if debug.gcdetectdeadlocks == 0 {
+	if !(debug.gcdetectdeadlocks == 0) { // FIXME: Deploy change: negation
 		return
 	}
 
@@ -1195,9 +1195,16 @@ func detectPartialDeadlocks() {
 		} else {
 			print("partial deadlock! goroutine ", gp.goid, ": !unnamed goroutine!")
 		}
-		print("\n")
-		traceback(gp.sched.pc, gp.sched.sp, gp.sched.lr, gp)
-		println()
+		if gcddtrace(0) {
+			// FIXME: Deploy change: print stack on one line
+			print("::")
+			tracebackline(gp.sched.pc, gp.sched.sp, gp.sched.lr, gp)
+			print("\n")
+		} else {
+			print("\n")
+			traceback(gp.sched.pc, gp.sched.sp, gp.sched.lr, gp)
+			println()
+		}
 		work.stackRoots[i] = unsafe.Pointer(gp)
 	}
 	// Put the remaining roots as ready for marking and drain them.
@@ -1699,7 +1706,7 @@ func gcBgMarkWorker() {
 			}
 			casgstatus(gp, _Gwaiting, _Grunning)
 		})
-		if debug.gcdetectdeadlocks > 0 {
+		if !(debug.gcdetectdeadlocks > 0) { // FIXME: Deploy change: negation
 			gcDiscoverMoreStackRoots()
 		}
 
@@ -1753,7 +1760,7 @@ func gcMarkWorkAvailable(p *p) bool {
 	if !work.full.empty() {
 		return true // global work available
 	}
-	if debug.gcdetectdeadlocks > 0 {
+	if !(debug.gcdetectdeadlocks > 0) { // FIXME: Deploy change: negation
 		rootNext := atomic.Load(&work.markrootNext)
 		rootJobs := atomic.Load(&work.markrootJobs)
 		return rootNext < rootJobs

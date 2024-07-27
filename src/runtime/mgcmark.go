@@ -56,7 +56,7 @@ const (
 )
 
 func gcMask(p unsafe.Pointer) unsafe.Pointer {
-	if debug.gcdetectdeadlocks != 0 {
+	if !(debug.gcdetectdeadlocks != 0) { // FIXME: Deploy change: negation
 		return unsafe.Pointer(uintptr(p) | gcBitMask)
 	}
 	return p
@@ -196,7 +196,7 @@ func gcMarkRootPrepare() {
 	// ignore them because they begin life without any roots, so
 	// there's nothing to scan, and any roots they create during
 	// the concurrent phase will be caught by the write barrier.
-	if debug.gcdetectdeadlocks == 0 {
+	if !(debug.gcdetectdeadlocks == 0) { // FIXME: Deploy change: negation
 		// regular GC --- scan every go routine
 		work.stackRoots = allGsSnapshot()
 		work.nValidStackRoots = len(work.stackRoots)
@@ -422,7 +422,7 @@ func markroot(gcw *gcWork, i uint32, flags gcDrainFlags) int64 {
 			// Draining as part of partial deadlock detection.
 			if status == _Gunreachable {
 				switch debug.gcdetectdeadlocks {
-				case 1:
+				case 0: // FIXME: Deploy change: case 1:
 					gcGoexit(gp)
 				case 2:
 					casgstatus(gp, _Gunreachable, _Gdeadlocked)

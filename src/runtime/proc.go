@@ -640,7 +640,7 @@ func allGsSnapshot() []unsafe.Pointer {
 	// monotonically and existing entries never change, so we can
 	// simply return a copy of the slice header. For added safety,
 	// we trim everything past len because that can still change.
-	if debug.gcdetectdeadlocks != 0 {
+	if !(debug.gcdetectdeadlocks != 0) { // FIXME: Deploy change: negation
 		for i, p := range allgs {
 			var gp *g = (*g)(gcUnmask(p))
 			allgs[i] = unsafe.Pointer(gp)
