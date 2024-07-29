@@ -1191,9 +1191,9 @@ func detectPartialDeadlocks() {
 		casgstatus(gp, _Gwaiting, _Gunreachable)
 		fn := findfunc(gp.startpc)
 		if fn.valid() {
-			print("partial deadlock! goroutine ", gp.goid, ": ", funcname(fn))
+			print("partial deadlock! goroutine ", gp.goid, ": ", funcname(fn), " Stack size: ", gp.stack.hi-gp.stack.lo, " bytes ")
 		} else {
-			print("partial deadlock! goroutine ", gp.goid, ": !unnamed goroutine!")
+			print("partial deadlock! goroutine ", gp.goid, ": !unnamed goroutine!", " Stack size: ", gp.stack.hi-gp.stack.lo, " bytes ")
 		}
 		print("\n")
 		traceback(gp.sched.pc, gp.sched.sp, gp.sched.lr, gp)
