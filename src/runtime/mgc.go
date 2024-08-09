@@ -191,7 +191,6 @@ func gcinit() {
 	lockInit(&work.sweepWaiters.lock, lockRankSweepWaiters)
 	lockInit(&work.assistQueue.lock, lockRankAssistQueue)
 	lockInit(&work.wbufSpans.lock, lockRankWbufSpans)
-	lockInit(&work.stackRootsLock, lockRankMark)
 }
 
 // gcenable is called after the bulk of the runtime initialization,
@@ -359,9 +358,6 @@ type workType struct {
 
 	// Base indexes of each root type. Set by gcMarkRootPrepare.
 	baseData, baseBSS, baseSpans, baseStacks, baseEnd uint32
-
-	// ANGE XXX: lock for updating the content and indices pointing to stackRoots
-	stackRootsLock mutex
 
 	// stackRoots is a snapshot of all of the Gs that existed before the
 	// beginning of concurrent marking.  During deadlock detection GC, stackRoots
@@ -821,10 +817,13 @@ func gcMarkDone() {
 	}
 
 	// Flag marking whether we performed partial deadlock detection in this cycle.
-	detectedDeadlocks := false
+	detectedDeadlocks := !(debug.gcdetectdeadlocks > 0)
 	// Ensure only one thread is running the ragged barrier at a
 	// time.
 	semacquire(&work.markDoneSema)
+	if debug.gcdetectdeadlocks > 0 {
+		gcDiscoverMoreStackRoots()
+	}
 
 top:
 	// Re-check transition condition under transition lock.
@@ -1074,8 +1073,6 @@ func stackRootValid(gp *g) bool {
 // if so add them into root set and increment work.markrootJobs accordingly
 // return true if we need to run another phase of markroots; return false otherwise
 func gcDiscoverMoreStackRoots() {
-	lock(&work.stackRootsLock)
-
 	// to begin with we have a set of unchecked stackRoots between
 	// vIndex and ivIndex.  During the loop, anything < vIndex should be
 	// valid stackRoots and anything >= ivIndex should be invalid stackRoots
@@ -1129,14 +1126,9 @@ func gcDiscoverMoreStackRoots() {
 		work.nValidStackRoots = vIndex
 		atomic.Store(&work.markrootJobs, uint32(newRootJobs))
 	}
-	unlock(&work.stackRootsLock)
 }
 
 func detectPartialDeadlocks() {
-	if debug.gcdetectdeadlocks == 0 {
-		return
-	}
-
 	// Report deadlocks and mark them unreachable, and resume marking
 	// we still need to mark these unreachable *g structs as they
 	// get reused, but their stack won't get scanned
@@ -1150,8 +1142,6 @@ func detectPartialDeadlocks() {
 			"[[[[[[[[[[[[[[[[ GC:", work.cycles.Load(), ":: III. DETECT DEADLOCKS ]]]]]]]]]]]]]]]]\n"+
 			"≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠≠")
 	}
-
-	lock(&work.stackRootsLock)
 
 	// Try to reach another fix point here. Keep scouting for runnable goroutines until
 	// none are left.
@@ -1168,9 +1158,9 @@ func detectPartialDeadlocks() {
 			}
 			work.stackRoots[i] = work.stackRoots[work.nValidStackRoots]
 			work.stackRoots[work.nValidStackRoots] = unsafe.Pointer(gp)
-			atomic.Store((*uint32)(unsafe.Pointer(&work.nValidStackRoots)), uint32(work.nValidStackRoots+1))
+			work.nValidStackRoots += 1
 			// We now have one more markroot job.
-			atomic.Store((*uint32)(unsafe.Pointer(&work.markrootJobs)), uint32(work.markrootJobs+1))
+			work.markrootJobs += 1
 			// We might still have some work to do.
 			// Make sure in the next iteration we will check re-check for new runnable goroutines.
 			stillWorking = true
@@ -1201,12 +1191,11 @@ func detectPartialDeadlocks() {
 		work.stackRoots[i] = unsafe.Pointer(gp)
 	}
 	// Put the remaining roots as ready for marking and drain them.
-	atomic.Store(&work.markrootJobs, work.markrootJobs+uint32(work.nStackRoots-work.nValidStackRoots))
+	work.markrootJobs += uint32(work.nStackRoots - work.nValidStackRoots)
 	for _, pp := range allp {
 		gcDrainMarkWorkerPartialDeadlocks(&pp.gcw)
 	}
 	work.nValidStackRoots = work.nStackRoots
-	unlock(&work.stackRootsLock)
 }
 
 // World must be stopped and mark assists and background workers must be
@@ -1699,9 +1688,6 @@ func gcBgMarkWorker() {
 			}
 			casgstatus(gp, _Gwaiting, _Grunning)
 		})
-		if debug.gcdetectdeadlocks > 0 {
-			gcDiscoverMoreStackRoots()
-		}
 
 		// Account for time and mark us as stopped.
 		now := nanotime()

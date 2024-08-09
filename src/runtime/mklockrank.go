@@ -50,7 +50,6 @@ NONE < defer;
 NONE <
   sweepWaiters,
   assistQueue,
-  mark,
   sweep;
 
 # Test only
@@ -68,7 +67,6 @@ assistQueue,
   forcegc,
   pollDesc, # pollDesc can interact with timers, which can lock sched.
   scavenge,
-  mark,
   sweep,
   sweepWaiters,
   testR,

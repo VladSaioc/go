@@ -18,7 +18,6 @@ const (
 	lockRankSweepWaiters
 	lockRankAssistQueue
 	lockRankSweep
-	lockRankMark
 	lockRankTestR
 	lockRankTestW
 	lockRankAllocmW
@@ -163,7 +162,6 @@ var lockPartialOrder [][]lockRank = [][]lockRank{
 	lockRankSweepWaiters:    {},
 	lockRankAssistQueue:     {},
 	lockRankSweep:           {},
-	lockRankMark:            {},
 	lockRankTestR:           {},
 	lockRankTestW:           {},
 	lockRankAllocmW:         {},
@@ -173,7 +171,7 @@ var lockPartialOrder [][]lockRank = [][]lockRank{
 	lockRankWakeableSleep:   {},
 	lockRankAllocmR:         {lockRankSysmon, lockRankScavenge, lockRankForcegc, lockRankSweepWaiters, lockRankAssistQueue, lockRankSweep, lockRankTestR, lockRankCpuprof, lockRankPollDesc, lockRankWakeableSleep},
 	lockRankExecR:           {lockRankSysmon, lockRankScavenge, lockRankForcegc, lockRankSweepWaiters, lockRankAssistQueue, lockRankSweep, lockRankTestR, lockRankCpuprof, lockRankPollDesc, lockRankWakeableSleep},
-	lockRankSched:           {lockRankSysmon, lockRankScavenge, lockRankForcegc, lockRankSweepWaiters, lockRankAssistQueue, lockRankSweep, lockRankTestR, lockRankCpuprof, lockRankPollDesc, lockRankWakeableSleep, lockRankAllocmR, lockRankExecR, lockRankMark},
+	lockRankSched:           {lockRankSysmon, lockRankScavenge, lockRankForcegc, lockRankSweepWaiters, lockRankAssistQueue, lockRankSweep, lockRankTestR, lockRankCpuprof, lockRankPollDesc, lockRankWakeableSleep, lockRankAllocmR, lockRankExecR},
 	lockRankAllg:            {lockRankSysmon, lockRankScavenge, lockRankForcegc, lockRankSweepWaiters, lockRankAssistQueue, lockRankSweep, lockRankTestR, lockRankCpuprof, lockRankPollDesc, lockRankWakeableSleep, lockRankAllocmR, lockRankExecR, lockRankSched},
 	lockRankAllp:            {lockRankSysmon, lockRankScavenge, lockRankForcegc, lockRankSweepWaiters, lockRankAssistQueue, lockRankSweep, lockRankTestR, lockRankCpuprof, lockRankPollDesc, lockRankWakeableSleep, lockRankAllocmR, lockRankExecR, lockRankSched},
 	lockRankTimers:          {lockRankSysmon, lockRankScavenge, lockRankForcegc, lockRankSweepWaiters, lockRankAssistQueue, lockRankSweep, lockRankTestR, lockRankCpuprof, lockRankPollDesc, lockRankWakeableSleep, lockRankAllocmR, lockRankExecR, lockRankSched, lockRankAllp, lockRankTimers},
